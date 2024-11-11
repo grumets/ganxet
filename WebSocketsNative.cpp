@@ -1701,41 +1701,40 @@ const std::string currentDateTime() {
 
 HRESULT SendTextMessageToWebHub(IHttpResponse* pHttpResponse, const char* sztext, DWORD* pcbSent)
 {
-    HTTP_DATA_CHUNK dataChunk[1];
     BOOL CompletionExpected;
-    DWORD cbSent=0;
-    LPSTR UTF8Str = NULL;
-    size_t cchUTF8Str=0;
+    DWORD cbSent = 0;
 
-    if (!sztext)
-        return S_OK;
-
-    if (!ExpandAndCopyUTF8FromChar(&UTF8Str, &cchUTF8Str, sztext) || !UTF8Str)
-        return S_FALSE;
-
-
-    // Set the chunk to a chunk in memory.
-    dataChunk[0].DataChunkType = HttpDataChunkFromMemory;
-    // Set the chunk to the first buffer.
-    dataChunk[0].FromMemory.pBuffer =(PVOID)UTF8Str;
-    // Set the chunk size to the first buffer size.
-    dataChunk[0].FromMemory.BufferLength =(USHORT)strlen(UTF8Str);
-
-    // Insert the data chunks into the response.
-    if (pcbSent)
-        *pcbSent = cbSent;
-    HRESULT hr = pHttpResponse->WriteEntityChunks(dataChunk, 1, FALSE, FALSE, &cbSent, &CompletionExpected); 
-    
-    if (FAILED(hr))
+    if (sztext)
     {
+        HTTP_DATA_CHUNK dataChunk[1];
+        LPSTR UTF8Str = NULL;
+        size_t cchUTF8Str = 0;
+
+        if (!ExpandAndCopyUTF8FromChar(&UTF8Str, &cchUTF8Str, sztext) || !UTF8Str)
+            return S_FALSE;
+
+        // Set the chunk to a chunk in memory.
+        dataChunk[0].DataChunkType = HttpDataChunkFromMemory;
+        // Set the chunk to the first buffer.
+        dataChunk[0].FromMemory.pBuffer = (PVOID)UTF8Str;
+        // Set the chunk size to the first buffer size.
+        dataChunk[0].FromMemory.BufferLength = (USHORT)strlen(UTF8Str);
+
+        // Insert the data chunks into the response.
+        if (pcbSent)
+            *pcbSent = cbSent;
+        HRESULT hr = pHttpResponse->WriteEntityChunks(dataChunk, 1, FALSE, FALSE, &cbSent, &CompletionExpected);
+
+        if (FAILED(hr))
+        {
+            if (UTF8Str)
+                free(UTF8Str);
+            return hr;
+        }
         if (UTF8Str)
             free(UTF8Str);
-        return hr;
     }
-    hr = pHttpResponse->Flush(false, true, &cbSent, &CompletionExpected);
-    if (UTF8Str)
-        free(UTF8Str);
-    return hr;
+    return pHttpResponse->Flush(false, true, &cbSent, &CompletionExpected);
 }
 
 #define FIRST_BYTE_FIN                    0x80  //the last message in a series. If it's 0, then the server keeps listening for more parts of the message; otherwise, the server should consider the message delivered
@@ -2061,20 +2060,23 @@ HRESULT hr;
 BOOL ProcessPostRequestFromServer(IN IHttpContext* pHttpContext, IHttpResponse* pHttpResponse, IHttpRequest *pHttpRequest, PSTR szRequest, char *szWebSockedId)
 {
     char* sig_value = NULL;
+    PCSTR pcstr = NULL;
 
     EnterCriticalSection(&SubscriptionsSection);
     char *szCallBackURL=GetCallBackURL(szTopic_Param, szRequest, szWebSockedId);
     if (!szCallBackURL)
     {
         LeaveCriticalSection(&SubscriptionsSection);
-        pHttpResponse->SetStatus(404, "Subscription not found", 0, 0);
+        pHttpResponse->SetStatus(404, "", 0, 0);
+        SendTextMessageToWebHub(pHttpResponse, "Subscription not found", NULL);
         return FALSE;
     }
     struct SUBSCRIPTION* subs = GetSubscription(szWebSockedId, szCallBackURL);
     if(!subs)
     {
         LeaveCriticalSection(&SubscriptionsSection);
-        pHttpResponse->SetStatus(404, "Subscription not found", 0, 0);
+        pHttpResponse->SetStatus(404, "", 0, 0);
+        SendTextMessageToWebHub(pHttpResponse, "Subscription not found", NULL);
         free(szCallBackURL);
         return FALSE;
     }
@@ -2087,7 +2089,8 @@ BOOL ProcessPostRequestFromServer(IN IHttpContext* pHttpContext, IHttpResponse* 
         LeaveCriticalSection(&SubscriptionsSection);
         char str[50];
         sprintf(str, "%s incorrect or missing", szXAPIKey_Param);
-        pHttpResponse->SetStatus(404, str, 0, 0);
+        pHttpResponse->SetStatus(404, "", 0, 0);
+        SendTextMessageToWebHub(pHttpResponse, str, NULL);
         free(szCallBackURL);
         return FALSE;
     }    
@@ -2104,23 +2107,16 @@ BOOL ProcessPostRequestFromServer(IN IHttpContext* pHttpContext, IHttpResponse* 
         }
 #endif  //DEBUG_TO_TEMP
         
-        PCSTR szXHubSignature = NULL;
+        char *szXHubSignature = NULL;
         USHORT cchXHubSignature = 0;
 
         pHttpRequest->GetHeader("X-Hub-Signature", &cchXHubSignature);
         if (cchXHubSignature > 0) // The header length will be 0 if the header was not found.
         {
-            if (NULL == (szXHubSignature = (PCSTR)malloc(cchXHubSignature + 1 * sizeof(PCSTR))))
+            if (NULL == (pcstr = pHttpRequest->GetHeader("X-Hub-Signature", &cchXHubSignature)))
             {
                 LeaveCriticalSection(&SubscriptionsSection);
-                pHttpResponse->SetStatus(404, "Not enough memory", 0, HRESULT_FROM_WIN32(ERROR_NOT_ENOUGH_MEMORY));
-                free(szCallBackURL);
-                return FALSE;
-            }
-            if (NULL == (szXHubSignature = pHttpRequest->GetHeader("X-Hub-Signature", &cchXHubSignature)))
-            {
-                LeaveCriticalSection(&SubscriptionsSection);
-                pHttpResponse->SetStatus(204, "", 0, 0);
+               pHttpResponse->SetStatus(507, "", 0, 0);
 #ifdef DEBUG_TO_TEMP
                 outputFile.open(szDebugFile, std::ofstream::app); 
                 if (outputFile.is_open()) { // check if the file was opened successfully
@@ -2128,15 +2124,25 @@ BOOL ProcessPostRequestFromServer(IN IHttpContext* pHttpContext, IHttpResponse* 
                     outputFile.close(); // close the file when done
                 }
 #endif  //DEBUG_TO_TEMP
+                SendTextMessageToWebHub(pHttpResponse, "Not enough memory", NULL);
                 free(szCallBackURL);
-                free((char*)szXHubSignature);
                 return FALSE;
             }
+            if (NULL == (szXHubSignature = (char*)malloc(((size_t)cchXHubSignature + 1) * sizeof(char*))))
+            {
+                LeaveCriticalSection(&SubscriptionsSection);
+                pHttpResponse->SetStatus(507, "", 0, HRESULT_FROM_WIN32(ERROR_NOT_ENOUGH_MEMORY));
+                SendTextMessageToWebHub(pHttpResponse, "Not enough memory", NULL);
+                free(szCallBackURL);
+                return FALSE;
+            }
+            strcpy(szXHubSignature, pcstr);
         }
         else
         {
             LeaveCriticalSection(&SubscriptionsSection);
             pHttpResponse->SetStatus(204, "", 0, 0);
+            SendTextMessageToWebHub(pHttpResponse, NULL, NULL);
             free(szCallBackURL);
             return FALSE;
         }
@@ -2148,7 +2154,7 @@ BOOL ProcessPostRequestFromServer(IN IHttpContext* pHttpContext, IHttpResponse* 
         }
 #endif  //DEBUG_TO_TEMP
         // Getting the algorithm of the hash
-        char* p = strstr((char*)szXHubSignature, "=");
+        char* p = strchr(szXHubSignature, '=');
         if (p == NULL)
         {
             LeaveCriticalSection(&SubscriptionsSection);
@@ -2161,7 +2167,8 @@ BOOL ProcessPostRequestFromServer(IN IHttpContext* pHttpContext, IHttpResponse* 
             }
 #endif  //DEBUG_TO_TEMP
             free(szCallBackURL);
-            free((char*)szXHubSignature);
+            free(szXHubSignature);
+            SendTextMessageToWebHub(pHttpResponse, NULL, NULL);
             return FALSE;
         }
         char* alg;
@@ -2169,9 +2176,10 @@ BOOL ProcessPostRequestFromServer(IN IHttpContext* pHttpContext, IHttpResponse* 
         if (NULL == (alg = (char*)malloc(len + 1)))
         {
             LeaveCriticalSection(&SubscriptionsSection);
-            pHttpResponse->SetStatus(404, "Not enough memory", 0, 0);
+            pHttpResponse->SetStatus(507, "", 0, 0);
+            SendTextMessageToWebHub(pHttpResponse, "Not enough memory", NULL);
             free(szCallBackURL);
-            free((char*)szXHubSignature);
+            free(szXHubSignature);
             return FALSE;
         }
         memcpy(alg, szXHubSignature, len);
@@ -2181,9 +2189,10 @@ BOOL ProcessPostRequestFromServer(IN IHttpContext* pHttpContext, IHttpResponse* 
         if (0 != _stricmp(alg, "sha256"))
         {
             LeaveCriticalSection(&SubscriptionsSection);
-            pHttpResponse->SetStatus(404, "Hash Algorithm doesn't supported", 0, 0);
+            pHttpResponse->SetStatus(404, "", 0, 0);
+            SendTextMessageToWebHub(pHttpResponse, "Hash Algorithm doesn't supported", NULL);
             free(szCallBackURL);
-            free((char*)szXHubSignature);
+            free(szXHubSignature);
             free(alg);
             return FALSE;
         }
@@ -2200,34 +2209,44 @@ BOOL ProcessPostRequestFromServer(IN IHttpContext* pHttpContext, IHttpResponse* 
         else
         {
             LeaveCriticalSection(&SubscriptionsSection);
-            pHttpResponse->SetStatus(404, "Hash Algorithm doesn't supported", 0, 0);
+            pHttpResponse->SetStatus(404, "", 0, 0);
+            SendTextMessageToWebHub(pHttpResponse, "Hash Algorithm doesn't supported", NULL);
             free(szCallBackURL);
             return FALSE;
         }
         */
+#ifdef DEBUG_TO_TEMP
+        outputFile.open(szDebugFile, std::ofstream::app);
+        if (outputFile.is_open()) { // check if the file was opened successfully
+            outputFile << "algorithm: " << alg << std::endl; // write data to the file
+            outputFile.close(); // close the file when done
+        }
+#endif  //DEBUG_TO_TEMP
+        free(alg);
 
         // Getting the message in hexadecimal
         len = strlen(p + 1);
         if (NULL == (sig_value = (char*)malloc(len + 1)))
         {
             LeaveCriticalSection(&SubscriptionsSection);
-            pHttpResponse->SetStatus(404, "Not enough memory", 0, 0);
+            pHttpResponse->SetStatus(507, "", 0, 0);
+            SendTextMessageToWebHub(pHttpResponse, "Not enough memory", NULL);
             free(szCallBackURL);
-            free((char*)szXHubSignature);
-            free(alg);
+            free(szXHubSignature);
             return FALSE;
         }
-        strcpy(sig_value, p + 1);
+        memcpy(sig_value, p + 1, len);
+        sig_value[len] = '\0';
+        //strcpy(sig_value, p + 1);
 
 #ifdef DEBUG_TO_TEMP
         outputFile.open(szDebugFile, std::ofstream::app); 
         if (outputFile.is_open()) { // check if the file was opened successfully
-            outputFile << "alg: " << alg << " value: " << sig_value << std::endl; // write data to the file
+            outputFile << " value of signature: " << sig_value << std::endl; // write data to the file
             outputFile.close(); // close the file when done
         }
 #endif  //DEBUG_TO_TEMP
-        free((char*)szXHubSignature);
-        free(alg);
+        free(szXHubSignature);
     }
 #ifdef DEBUG_TO_TEMP
     else
@@ -2239,23 +2258,72 @@ BOOL ProcessPostRequestFromServer(IN IHttpContext* pHttpContext, IHttpResponse* 
         }
     }
 #endif  //DEBUG_TO_TEMP
-
-    // Getting the content of the request
-    void *szrequest_body=NULL;
-    // DWORD request_size = 1024
-    DWORD cbSent, request_size = pHttpRequest->GetRemainingEntityBytes();
-
-    if (NULL == (szrequest_body = pHttpContext->AllocateRequestMemory(request_size)))
-    {
-        LeaveCriticalSection(&SubscriptionsSection);
-        pHttpResponse->SetStatus(404, "Not enough memory", 0, 0);
-        free(szCallBackURL);
-        if (sig_value) free(sig_value);
-        return FALSE;
+#ifdef DEBUG_TO_TEMP
+    outputFile.open(szDebugFile, std::ofstream::app);
+    if (outputFile.is_open()) { // check if the file was opened successfully
+        outputFile << "linia "<< __LINE__ << "\n" << std::endl; // write data to the file
+        outputFile.close(); // close the file when done
     }
-    BOOL fCompletionExpected = false;
-    pHttpRequest->ReadEntityBody(szrequest_body,request_size,false,&cbSent, &fCompletionExpected);
+#endif  //DEBUG_TO_TEMP
+    // Getting the content of the request
+    char *szrequest_body=NULL;
+    DWORD cbSent, request_size = 100024;
 
+    //request_size=pHttpRequest->GetRemainingEntityBytes();
+
+#ifdef DEBUG_TO_TEMP
+    outputFile.open(szDebugFile, std::ofstream::app);
+    if (outputFile.is_open()) { // check if the file was opened successfully
+        outputFile << "request_size: " << request_size << "\n" << std::endl; // write data to the file
+        outputFile.close(); // close the file when done
+    }
+#endif  //DEBUG_TO_TEMP
+    if (request_size > 0)
+    {
+        if (NULL == (szrequest_body = (char*)pHttpContext->AllocateRequestMemory(request_size + 1)))
+        {
+#ifdef DEBUG_TO_TEMP
+            outputFile.open(szDebugFile, std::ofstream::app);
+            if (outputFile.is_open()) { // check if the file was opened successfully
+                outputFile << "linia " << __LINE__ << " pHttpContext->AllocateRequestMemory \n" << std::endl; // write data to the file
+                outputFile.close(); // close the file when done
+            }
+#endif  //DEBUG_TO_TEMP
+            LeaveCriticalSection(&SubscriptionsSection);
+            pHttpResponse->SetStatus(507, "", 0, 0);
+            SendTextMessageToWebHub(pHttpResponse, "Not enough memory", NULL);
+            free(szCallBackURL);
+            if (sig_value) free(sig_value);
+            return FALSE;
+        }
+        BOOL fCompletionExpected = false;
+        HRESULT hr = pHttpRequest->ReadEntityBody((void*)szrequest_body, request_size, false, &cbSent, &fCompletionExpected);
+        // Test for an error.
+        if (FAILED(hr))
+        {
+            #ifdef DEBUG_TO_TEMP
+            outputFile.open(szDebugFile, std::ofstream::app);
+            if (outputFile.is_open()) { // check if the file was opened successfully
+                outputFile << "error "<< hr << " on  pHttpRequest->ReadEntityBody processing POST\n" << std::endl; // write data to the file
+                outputFile.close(); // close the file when done
+            }
+            #endif  //DEBUG_TO_TEMP
+            LeaveCriticalSection(&SubscriptionsSection);
+            pHttpResponse->SetStatus(500, "", 0, 0);
+            SendTextMessageToWebHub(pHttpResponse, "Error on reading the body", NULL);
+            free(szCallBackURL);
+            if (sig_value) free(sig_value);
+            return FALSE;
+        }
+        szrequest_body[cbSent] = '\0';
+#ifdef DEBUG_TO_TEMP
+        outputFile.open(szDebugFile, std::ofstream::app);
+        if (outputFile.is_open()) { // check if the file was opened successfully
+            outputFile << "cbSent :" << cbSent << "szrequest_body: " << szrequest_body << "\n" << std::endl; // write data to the file
+            outputFile.close(); // close the file when done
+        }
+#endif  //DEBUG_TO_TEMP
+    }
 
     if (subs->szSecret && sig_value)
     {
@@ -2265,7 +2333,8 @@ BOOL ProcessPostRequestFromServer(IN IHttpContext* pHttpContext, IHttpResponse* 
         if (computed_sig_value == NULL)
         {
             LeaveCriticalSection(&SubscriptionsSection);
-            pHttpResponse->SetStatus(404, "Signature validation failed", 0, 0);
+            pHttpResponse->SetStatus(404, "", 0, 0);
+            SendTextMessageToWebHub(pHttpResponse, "Signature validation failed", NULL);
             free(szCallBackURL);
             free(sig_value);
             return FALSE;
@@ -2280,7 +2349,7 @@ BOOL ProcessPostRequestFromServer(IN IHttpContext* pHttpContext, IHttpResponse* 
         unsigned i;
 
         // Call hmac-sha256 function
-        hmac_sha256(subs->szSecret, strlen(subs->szSecret), (char*)szrequest_body, request_size/* strlen(szrequest_body)*/, &out, sizeof(out));
+        hmac_sha256(subs->szSecret, strlen(subs->szSecret), szrequest_body, strlen(szrequest_body), &out, sizeof(out));
      
 
         // Convert `out` to string with printf
@@ -2299,7 +2368,8 @@ BOOL ProcessPostRequestFromServer(IN IHttpContext* pHttpContext, IHttpResponse* 
         if (0 != strcmp(sig_value, computed_sig_value))
         {
             LeaveCriticalSection(&SubscriptionsSection);
-            pHttpResponse->SetStatus(404, "Signature validation failed", 0, 0);
+            pHttpResponse->SetStatus(404, "", 0, 0);
+            SendTextMessageToWebHub(pHttpResponse, "Signature validation failed", NULL);
             free(szCallBackURL);
             free(sig_value);
             return FALSE;
@@ -2311,7 +2381,8 @@ BOOL ProcessPostRequestFromServer(IN IHttpContext* pHttpContext, IHttpResponse* 
     AddNotificationsToSubscriptions(szWebSockedId, szCallBackURL, (char*)szrequest_body);
     LeaveCriticalSection(&SubscriptionsSection);
     free(szCallBackURL);
-    pHttpResponse->SetStatus(202, "", 0, 0);
+    pHttpResponse->SetStatus(204, "", 0, 0);
+    SendTextMessageToWebHub(pHttpResponse, NULL, NULL);
     return TRUE;
 }
 
@@ -2531,6 +2602,8 @@ char* pszScriptName = NULL;
 
 BOOL IsAWebHookHandShake(IN IHttpContext* pHttpContext, IN IHttpRequest* pHttpRequest)
 {
+PCSTR p;
+
     // Checking the HTTP version
     USHORT uMajorVersion;
     USHORT uMinorVersion;
@@ -2547,23 +2620,27 @@ BOOL IsAWebHookHandShake(IN IHttpContext* pHttpContext, IN IHttpRequest* pHttpRe
 #endif  //DEBUG_TO_TEMP
 
     // Checking the header keys
-    PCSTR pszUpgrade, pszConnection, pszWebSocketKey, pszWebSocketVersion;
+    char *pszUpgrade, *pszConnection, *pszWebSocketKey, *pszWebSocketVersion;
     USHORT cchUpgrade = 0, cchConnection = 0, cchWebSocketKey = 0, cchWebSocketVersion = 0;
 
     // Upgrade : websocket
     pHttpRequest->GetHeader("Upgrade", &cchUpgrade);
     if (cchUpgrade < 1)
         return FALSE;
-
-    // Allocate space to store the header.
-    if (NULL == (pszUpgrade = (PCSTR)pHttpContext->AllocateRequestMemory(cchUpgrade + 1)))
-        return FALSE;
     // Retrieve the "Upgrade" header.
-    if (NULL == (pszUpgrade = pHttpRequest->GetHeader("Upgrade", &cchUpgrade)))
+    if (NULL == (p = pHttpRequest->GetHeader("Upgrade", &cchUpgrade)))
         return FALSE;
+    // Allocate space to store the header.
+    if (NULL == (pszUpgrade = (char*)malloc((size_t)cchUpgrade + 1)))
+        return FALSE;
+    strcpy(pszUpgrade, p);
+
     // Test for an error.
     if (NULL == stristr(pszUpgrade, "websocket"))
+    {
+        free(pszUpgrade);
         return FALSE;
+    }
 #ifdef DEBUG_TO_TEMP
     outputFile.open(szDebugFile, std::ofstream::app); 
     if (outputFile.is_open()) { // check if the file was opened successfully
@@ -2571,20 +2648,26 @@ BOOL IsAWebHookHandShake(IN IHttpContext* pHttpContext, IN IHttpRequest* pHttpRe
         outputFile.close(); // close the file when done
     }
 #endif  //DEBUG_TO_TEMP
+    free(pszUpgrade);
 
     // Connection: Upgrade
     pHttpRequest->GetHeader("Connection", &cchConnection);
     if (cchConnection < 1)
         return FALSE;
-    // Allocate space to store the header.
-    if (NULL == (pszConnection = (PCSTR)pHttpContext->AllocateRequestMemory(cchConnection + 1)))
-        return FALSE;
     // Retrieve the "Connection" header.
-    if (NULL == (pszConnection = pHttpRequest->GetHeader("Connection", &cchConnection)))
+    if (NULL == (p = pHttpRequest->GetHeader("Connection", &cchConnection)))
         return FALSE;
+    // Allocate space to store the header.
+    if (NULL == (pszConnection = (char*)malloc((size_t)cchConnection + 1)))
+        return FALSE;
+    strcpy(pszConnection, p);
+
     // Test for an error.
     if (NULL == stristr(pszConnection, "Upgrade"))
+    {
+        free(pszConnection);
         return FALSE;
+    }
 #ifdef DEBUG_TO_TEMP
     outputFile.open(szDebugFile, std::ofstream::app); 
     if (outputFile.is_open()) { // check if the file was opened successfully
@@ -2592,15 +2675,18 @@ BOOL IsAWebHookHandShake(IN IHttpContext* pHttpContext, IN IHttpRequest* pHttpRe
         outputFile.close(); // close the file when done
     }
 #endif  //DEBUG_TO_TEMP
+    free(pszConnection);
 
     // Sec-WebSocket-Key
     pHttpRequest->GetHeader("Sec-WebSocket-Key", &cchWebSocketKey);
     if (cchWebSocketKey < 1)
         return FALSE;
-    if (NULL == (pszWebSocketKey = (PCSTR)pHttpContext->AllocateRequestMemory(cchWebSocketKey + 1)))
+    if (NULL == (p = pHttpRequest->GetHeader("Sec-WebSocket-Key", &cchConnection)))
         return FALSE;
-    if (NULL == (pszWebSocketKey = pHttpRequest->GetHeader("Sec-WebSocket-Key", &cchConnection)))
+    if (NULL == (pszWebSocketKey = (char*)malloc((size_t)cchWebSocketKey + 1)))
         return FALSE;
+    strcpy(pszWebSocketKey, p);
+
 #ifdef DEBUG_TO_TEMP
     outputFile.open(szDebugFile, std::ofstream::app); 
     if (outputFile.is_open()) { // check if the file was opened successfully
@@ -2608,18 +2694,24 @@ BOOL IsAWebHookHandShake(IN IHttpContext* pHttpContext, IN IHttpRequest* pHttpRe
         outputFile.close(); // close the file when done
     }
 #endif  //DEBUG_TO_TEMP
+    free(pszWebSocketKey);
 
     // Sec-WebSocket-Version : 13
     pHttpRequest->GetHeader("Sec-WebSocket-Version", &cchWebSocketVersion);
     if (cchWebSocketVersion < 1)
         return FALSE;
-    if (NULL == (pszWebSocketVersion = (PCSTR)pHttpContext->AllocateRequestMemory(cchWebSocketVersion + 1)))
+    if (NULL == (p = pHttpRequest->GetHeader("Sec-WebSocket-Version", &cchWebSocketVersion)))
         return FALSE;
-    if (NULL == (pszWebSocketVersion = pHttpRequest->GetHeader("Sec-WebSocket-Version", &cchWebSocketVersion)))
+    if (NULL == (pszWebSocketVersion = (char*)malloc((size_t)cchWebSocketVersion + 1)))
         return FALSE;
-        // the version must be 13
+    strcpy(pszWebSocketVersion,p);
+    
+    // the version must be 13
     if (0 != strcmp(pszWebSocketVersion, "13"))
+    {
+        free(pszWebSocketVersion);
         return FALSE;
+    }
 #ifdef DEBUG_TO_TEMP
     outputFile.open(szDebugFile, std::ofstream::app); 
     if (outputFile.is_open()) { // check if the file was opened successfully
@@ -2627,7 +2719,7 @@ BOOL IsAWebHookHandShake(IN IHttpContext* pHttpContext, IN IHttpRequest* pHttpRe
         outputFile.close(); // close the file when done
     }
 #endif  //DEBUG_TO_TEMP
-
+    free(pszWebSocketVersion);
     return TRUE;
 }
 
