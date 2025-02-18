@@ -1,0 +1,768 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8"/>
+<link rel="stylesheet" type="text/css" href="style.css"/>
+<link href="imgs\favicon.ico" rel="shortcut icon" type="image/vnd.microsoft.icon" />
+<title>MiraMon OGC STA Subscription Client</title>
+
+<script src="md5.min.js"></script>
+<script type="text/javascript">
+"use strict"
+
+var WSMM=null;
+const initialUrlWebHub="https://citiobs.demo.secure-dimensions.de/staplustest/v1.1/Observations";
+var urlWebHook="https://callus.ddns.net/WSMM";
+var urlWebSocket="wss://callus.ddns.net/WSMM";
+var webSocketId="";
+var XAPIKey="TestXAPIKey9876543210";
+
+var subs=[]; // array with the information of the subscriptions alive
+
+var topicSample="https://citiobs.demo.secure-dimensions.de/staplustest/v1.1/Observations?$select=phenomenonTime,result&$filter=Datastream/ObservedProperty/definition eq 'https://qudt.org/vocab/quantitykind/SoundExposureLevel'";
+
+var countData=0;
+
+var connectionStatus=null;
+var connectButton=null;
+var disconnectButton=null;
+var sendMessage=null;
+var messages=null;
+var sendButton=null;	
+
+var topicURLToDiscovery=null;
+var discoverySubscription=null;
+var webSubURLToSubscribe=null;
+var topicToSubscribe=null;
+var sendSubscription=null;
+
+
+function initVars(){
+	var serverUrl=document.getElementById("serverUrl");
+	if(serverUrl)
+		serverUrl.value=urlWebSocket;	
+	connectionStatus=document.getElementById("connectionStatus");
+	connectButton=document.getElementById("connectButton");
+	disconnectButton=document.getElementById("disconnectButton");
+	
+	sendMessage=document.getElementById("sendMessage");
+	messages=document.getElementById("messages");
+	sendButton=document.getElementById("sendButton");	
+	
+	topicURLToDiscovery=document.getElementById("topicURLToDiscovery");
+	if(topicURLToDiscovery)
+		topicURLToDiscovery.value=initialUrlWebHub;	
+	
+	discoverySubscription=document.getElementById("discoverySubscription");
+	webSubURLToSubscribe=document.getElementById("webSubURLToSubscribe");
+	topicToSubscribe=document.getElementById("topicToSubscribe");
+	sendSubscription=document.getElementById("sendSubscription");
+}
+
+
+function heartbeat() {
+  if (!WSMM) return;
+  if (WSMM.readyState !== 1) return;
+  WSMM.send("heartbeat");
+  setTimeout(heartbeat, 500);
+}
+
+function sendMessageToWS(){    
+	if(WSMM && WSMM.readyState==WebSocket.OPEN)
+	{
+		if(sendMessage && sendMessage.value)
+		{
+			WSMM.send(sendMessage.value);			
+			if(messages)
+				messages.innerHTML+= ("<span class=\"sent\">"+sendMessage.value+"</span><br>");	
+			sendMessage.value="";
+		}
+	}
+}
+
+function clearMessagesWindow(){
+	if(messages)
+		messages.innerHTML="";
+}
+
+function onWSOpen(event) {    
+	//Connection opened
+	urlWebSocket=document.getElementById("serverUrl").value;
+	
+	var url=new URL(urlWebSocket);
+	
+	if(url.protocol.toLowerCase()=="wss:")
+		urlWebHook=urlWebSocket.replace(url.protocol, "https:");
+	else if(url.protocol.toLowerCase()=="ws:")
+		urlWebHook=urlWebSocket.urlWebSocket.replace(url.protocol, "http:");
+	else
+		alert ("urlWebHook incorrect");
+	
+	if(connectionStatus)
+		connectionStatus.innerHTML="OPENED AND WAITING FOR IDENTIFIER";
+	if(sendMessage)
+		sendMessage.disabled=false;
+	if(sendButton)
+		sendButton.disabled=false;
+	if(connectButton)
+		connectButton.style.display="none";
+	if(disconnectButton)
+		disconnectButton.style.display="inline";
+	
+}
+
+function onWSIdentifierRecieved() { 
+	if(connectionStatus)
+		connectionStatus.innerHTML="OPENED WS Id: "+webSocketId;
+	
+	if(topicURLToDiscovery)
+		topicURLToDiscovery.disabled=false;
+	if(discoverySubscription)
+		discoverySubscription.disabled=false;
+	if(webSubURLToSubscribe)
+		webSubURLToSubscribe.disabled=false;
+	if(topicToSubscribe)
+		topicToSubscribe.disabled=false;
+	if(sendSubscription)
+		sendSubscription.disabled=false;	
+ }
+
+function onWSError (event) {    
+	if(connectionStatus)
+		connectionStatus.innerHTML="ERROR";	
+	if(messages)
+		messages.innerHTML+= ("<span class=\"error\">error: "+event+"</span><br>");	
+}
+
+async function onWSMessage (event) {    
+    // Listen for messages from server
+	var data=await event.data;
+	if(messages)
+	{
+		var data_json=JSON.parse(data);
+		if(data_json)
+		{
+			if(data_json.webSocketId)
+			{
+				if(!webSocketId || webSocketId=="")
+				{
+					webSocketId=data_json.webSocketId;
+					onWSIdentifierRecieved();
+				}
+			}
+		}
+		messages.innerHTML+= ("Message "+countData+":<br>"+data+"<br>");		
+		countData++;
+	}
+}
+
+function onWSClose (event) {    
+    //Connection closed
+	webSocketId="";
+	if(connectionStatus)
+		connectionStatus.innerHTML="CLOSED";	
+	if(sendMessage)
+		sendMessage.disabled=true;
+	if(sendButton)
+		sendButton.disabled=true;
+	if(connectButton)
+		connectButton.style.display="inline";
+	if(disconnectButton)
+		disconnectButton.style.display="none";
+		
+	if(topicURLToDiscovery)
+		topicURLToDiscovery.disabled=true;
+	if(discoverySubscription)
+		discoverySubscription.disabled=true;
+	if(webSubURLToSubscribe)
+		webSubURLToSubscribe.disabled=true;
+	if(topicToSubscribe)
+		topicToSubscribe.disabled=true;
+	if(sendSubscription)
+		sendSubscription.disabled=true;
+	WSMM=null;
+}
+
+function closeWS()
+{
+	// Cancelling all subscriptions
+	for(var i=document.WSConnection.listTopicSubscribe.length-1; i>=0; i--)
+		UnSubscribeTopicToWebHub(i);
+	// Closing the WS connection	
+	if(WSMM)
+		WSMM.close();
+}
+
+function createWS(url_ws)
+{	
+	closeWS();	
+	
+	// Create WebSocket connection.
+	WSMM = new WebSocket(url_ws);
+	
+	// WebSocket events
+	WSMM.addEventListener("open", onWSOpen);
+	WSMM.addEventListener("message", onWSMessage);
+	WSMM.addEventListener("error", onWSError);
+	WSMM.addEventListener("close", onWSClose);	
+}
+
+// Function based on SitePoint Pty. Ltd, www.sitepoint.com
+function Ajax()
+{
+	this.req = null;
+	this.url = null;
+	this.status = null;
+	this.statusText = '';
+	this.method = 'GET';
+	this.async = true;
+	this.dataPayload = "";
+	this.readyState = null;
+	this.responseText = null;
+	this.responseXML = null;
+	this.handleResp = null;
+	this.responseFormat = 'text/plain', // 'text/plain', 'text/xml', 'object'
+	this.requestFormat = 'application/x-www-form-urlencoded; charset=utf-8'  //només per POST
+	this.structResp=null;
+	this.mimeType = null;
+	//this.headers = [];
+	this.requestHeaders=[];
+	this.accessToken = null;
+	this.accessTokenType =null;
+
+	this.init = function() {
+		var i = 0;
+		var reqTry = [
+			function() { return new XMLHttpRequest(); },
+			function() { return new ActiveXObject('Msxml2.XMLHTTP') },
+			function() { return new ActiveXObject('Microsoft.XMLHTTP' )} ];
+
+		while (!this.req && (i < reqTry.length)) {
+			try {
+				this.req = reqTry[i++]();
+			}
+			catch(e) {}
+		}
+		return true;
+	};
+	this.doGet = function(url, hand, response_format, struct)
+	{
+		//alert(url);  //·$·Per a depurar
+		this.url = url;
+		this.handleResp = hand;
+		this.responseFormat = response_format || 'text/plain';
+		this.structResp = struct;
+		this.method = 'GET';
+		this.doReq();
+	};
+
+	this.doPost = function(url, request_format, dataPayload, hand, response_format, struct)
+	{
+		this.url = url;
+		this.requestFormat = request_format || 'application/x-www-form-urlencoded; charset=utf-8';
+		this.dataPayload = dataPayload;
+		this.handleResp = hand;
+		this.responseFormat = response_format || 'text/plain';
+		this.structResp = struct;
+		this.method = 'POST';
+		this.doReq();
+	};
+
+	this.doPut = function(url, request_format, dataPayload, hand, response_format, struct)
+	{
+		this.url = url;
+		this.requestFormat = request_format || 'application/x-www-form-urlencoded; charset=utf-8';
+		this.dataPayload = dataPayload;
+		this.handleResp = hand;
+		this.responseFormat = response_format || 'text/plain';
+		this.structResp = struct;
+		this.method = 'PUT';
+		this.doReq();
+	};
+
+	this.doDelete = function(url, hand, response_format, struct)
+	{
+		//alert(url);
+		this.url = url;
+		this.handleResp = hand;
+		this.responseFormat = response_format || 'text/plain';
+		this.structResp = struct;
+		this.method = 'DELETE';
+		this.doReq();
+	};
+
+	this.doReqIndirect = function(method, url, request_format, dataPayload, hand, response_format, struct)
+	{
+		if (method=="POST")
+			this.doPost(url, request_format, dataPayload, hand, response_format, struct);
+		else if (method=="PUT")
+			this.doPut(url, request_format, dataPayload, hand, response_format, struct);
+		else if (method=="DELETE")
+			this.doDelete(url, hand, response_format, struct);
+		else
+			this.doGet(url, hand, response_format, struct);
+	};
+
+	this.doReq = function()
+	{
+		var self = null;
+		var req = null;
+		var headArr = [];
+
+		if (!this.init()) {
+			alert('Could not create XMLHttpRequest object.');
+			return;
+		}
+
+		req = this.req;
+		req.open(this.method, this.url, this.async);
+
+		if (this.accessTokenType && this.accessTokenType.length)
+   			this.setRequestHeader("nb-access-token-type", this.accessTokenType);  		
+		if (this.accessToken && this.accessToken.length)
+			this.setRequestHeader("Authorization", "Bearer " + this.accessToken);
+		if ((this.method == 'POST' || this.method == 'PUT') && this.requestFormat)
+			req.setRequestHeader('Content-Type', this.requestFormat);
+		if ((this.method == 'POST' || this.method == 'PUT') && this.responseFormat)
+			req.setRequestHeader('Accept', this.responseFormat);
+		if (this.method != 'GET')
+			req.setRequestHeader('Access-Control-Expose-Headers', '*');  //Si això es fa amb mètode GET genera una preflight que pot fallar. En els altres casos es fa el preflight igualment...
+
+		for (var i=0; i<this.requestHeaders.length; i++)
+			req.setRequestHeader(this.requestHeaders[i].name, this.requestHeaders[i].value);
+
+		self = this;
+
+		req.onreadystatechange = function() {
+			var resp = null;
+			self.readyState = req.readyState;
+			if (req.readyState == 2)  // this.HEADERS_RECEIVED
+			{
+			    // Get the raw header string
+			    var headers = req.getAllResponseHeaders();
+
+				// Convert the header string into an array
+				// of individual headers
+				var arr = headers.trim().split(/[\r\n]+/);
+
+				// Create a map of header names to values
+				req.responseHeaders = {};
+				arr.forEach(function (line) {
+				  var parts = line.split(': ');
+				  var header = parts.shift();
+				  var value = parts.join(': ');
+				  req.responseHeaders[header] = value;
+				});
+		    }
+
+			else if (req.readyState == 4)
+			{
+				self.status = req.status;
+				self.statusText = req.statusText;
+				self.responseText = req.responseText;
+				self.responseXML = req.responseXML;
+				switch(self.responseFormat) {
+					default:
+					case 'text/plain':
+						resp = self.responseText;
+						break;
+					case 'text/xml':
+						if (self.responseXML)
+							resp = self.responseXML;
+						else
+						{
+							//Si el navegador rep application/vnd.ogc.wms_xml es pensa que no és XML i cal tractar-ho com a text
+							if (window.DOMParser)
+								resp=(new DOMParser()).parseFromString(self.responseText, "text/xml");
+							else
+							{
+								//IE8 and previous
+								resp=new ActiveXObject("Microsoft.XMLDOM");
+								resp.loadXML(self.responseText);
+							}
+						}
+						break;
+					case 'application/json':
+						if (self.responseText=="")
+						{
+							resp = "";
+							break;
+						}
+						if (self.responseText)
+						{
+							try {
+								resp = JSON.parse(self.responseText);
+							}
+							catch (e) {
+								self.handleErr("JSON file error: " + self.responseText, self.structResp);
+								return;
+							}
+						}
+						break;
+					case 'object':
+						resp = req;
+						break;
+				}
+
+				if(self.structResp && self.structResp.text)
+					self.structResp.text=self.responseText;
+				if (self.status > 199 && self.status < 300) {
+					if (!self.handleResp) {
+						alert('No response handler defined for this XMLHttpRequest object.');
+            					return;
+					}
+					if(self.structResp)
+					{
+						try
+						{
+							self.handleResp(resp, self.structResp);
+						}
+						catch(e)
+						{
+							alert("Error on handling server response. "+ e)
+						}
+					}
+					else
+						self.handleResp(resp);
+				} else {
+					self.handleErr(resp, self.structResp);
+				}
+			}
+		}
+		req.send(this.dataPayload);
+	};
+	this.abort = function() {
+		if (this.req) {
+			this.req.onreadystatechange = function() { };
+			this.req.abort();
+			this.req = null;
+		}
+	};
+	this.handleErr = function() {
+		var errorWin;
+		// Create new window and display error
+		try {
+			errorWin = window.open('', 'errorWin');
+			errorWin.document.body.innerHTML = "<b>Request: </b>"+ this.url + "<br><br><b>Response:</b><br><pre>"+this.responseText+"</pre>";
+		}
+		// If pop-up gets blocked, inform user
+		catch(e) {
+			alert('An error occurred, but the error message cannot be displayed because of your browser\'s pop-up blocker.\n' +
+				'You could try to allow pop-ups from this Web site. Meanwhile, the text version of the error is:\n' + this.responseText);
+		}
+	};
+	this.setMimeType = function(mimeType) {
+		this.mimeType = mimeType;
+	};
+	this.setHandlerResp = function(funcRef) {
+		this.handleResp = funcRef;
+	};
+	this.setHandlerErr = function(funcRef) {
+		this.handleErr = funcRef;
+	};
+	this.setHandlerBoth = function(funcRef) {
+		this.handleResp = funcRef;
+		this.handleErr = funcRef;
+	};
+	this.setRequestHeader = function(headerName, headerValue) {
+		this.requestHeaders.push({"name": headerName, "value": headerValue});
+		//this.headers.push(headerName + ': ' + headerValue);
+	};
+
+	this.getResponseHeader = function(headerName) {
+		return this.req.responseHeaders[headerName.toLowerCase()];
+	};
+
+	this.setAccessToken = function(accessToken, accessTokenType) {
+		this.accessToken=accessToken;
+		this.accessTokenType=accessTokenType;
+	};
+}
+
+function makeSecret() {
+    let result = '';
+    const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    const charactersLength = characters.length;
+    let counter = 0;
+	const max=199; // The secret MUST be less than 200 bytes in length.
+    while (counter < max) {
+      result += characters.charAt(Math.floor(Math.random() * charactersLength));
+      counter += 1;
+    }
+    return result;
+}
+
+function removeSusb(one_subs){
+	var index = subs.indexOf(one_subs);
+	if (index > -1) // only splice array when item is found
+		subs.splice(index, 1);
+	return subs;
+}
+
+function EvaluateResponseSendSubscription(doc, one_subs){
+	if(messages)	
+		messages.innerHTML+= ("<span class=\"error\">Subcription to topic \""+one_subs.topic+"\ done. </span><br>");	
+	if(one_subs.reSubs)
+	{
+		one_subs.reSubs	= false;
+		return;
+	}
+		
+	var listTopicSubscribe=document.getElementById("listTopicSubscribe");
+	if(listTopicSubscribe)
+	{
+		listTopicSubscribe.options.add(new Option(one_subs.topic, one_subs.topic));
+		var sendReSubscription=document.getElementById("sendReSubscription");
+		if(sendReSubscription)
+			sendReSubscription.disabled=false;
+		var sendUnSubscription=document.getElementById("sendUnSubscription");
+		if(sendUnSubscription)
+			sendUnSubscription.disabled=false;
+	}
+	return;
+}
+
+function ErrorResponseSendSubscription(error, one_subs){
+	if(messages)
+		messages.innerHTML+= ("<span class=\"error\">ERROR in the topic subscription \""+one_subs.topic+"\: "+error+"</span><br>");	
+		
+	// Delete subs from the list of active subscriptions
+	removeSusb(one_subs);
+	return;
+}
+
+function EvaluateResponseSendUnSubscription(doc, one_subs){
+	if(messages)	
+		messages.innerHTML+= ("<span class=\"error\">Unsubcription to topic \""+one_subs.topic+"\ done. </span><br>");	
+		
+	// Delete subs from the list of active subscriptions
+	var listTopicSubscribe=document.getElementById("listTopicSubscribe");
+	if(listTopicSubscribe)
+	{
+		listTopicSubscribe.options.remove(one_subs.selectedIndex);
+		if(listTopicSubscribe.options.length<1)
+		{
+			sendReSubscription=document.getElementById("sendReSubscription");
+			if(sendReSubscription)
+				sendReSubscription.disabled=true;
+			var sendUnSubscription=document.getElementById("sendUnSubscription");
+			if(sendUnSubscription)
+				sendUnSubscription.disabled=true;
+		}
+	}
+	removeSusb(one_subs);
+	return;
+}
+
+function ErrorResponseSendUnSubscription(error, one_subs){
+	if(messages)
+		messages.innerHTML+= ("<span class=\"error\">ERROR in the topic unsubscription \""+one_subs.topic+"\: "+error+"</span><br>");	
+	// Delete subs from the list of active subscriptions
+	removeSusb(one_subs);
+	return;
+}
+
+function UnSubscribeTopicToWebHub(selectedIndex){
+var topic=document.WSConnection.listTopicSubscribe.options[selectedIndex].text;
+
+	if(!topic)
+		return;	
+	var one_subs=null;
+	for(var i=0; i<subs.length; i++)
+	{
+		if(topic.toLowerCase()==subs[i].topic.toLowerCase())
+		{			
+			one_subs=subs[i];				
+			break;
+		}
+	}
+	if(!one_subs)
+	{	
+		alert("Subscription for topic \""+topic+"\" was not found");
+		return;
+	}
+	// Sending a POST message with some headers and with the data in application/x-www-form-urlencoded' format.		
+	var data_post=[];
+	data_post.push("hub.callback=" , encodeURIComponent(one_subs.callback),
+				   "&hub.topic=", encodeURIComponent(one_subs.topic), "&hub.mode=unsubscribe",
+				   "&hub.secret=", one_subs.hub_secret,
+				   "&webhook.x_api_key=",one_subs.x_api_key);
+	
+	one_subs.ajax=new Ajax();
+	one_subs.selectedIndex=selectedIndex;
+	
+	//one_subs.ajax.setAccessToken(obj.accessToken, null);
+	one_subs.ajax.setHandlerErr(ErrorResponseSendUnSubscription);		
+	
+	one_subs.ajax.doPost(one_subs.urlWebHub, "application/x-www-form-urlencoded; charset=utf-8", data_post.join(""), EvaluateResponseSendUnSubscription, "text/plain", one_subs);	
+	return;
+}
+
+function SubscribeTopicToWebHub(urlWebSub, topic, lease_seconds){
+	if(!topic)
+		return;	
+		
+	var one_subs=null, reSubs=false;
+	for(var i=0; i<subs.length; i++)
+	{
+		if(topic.toLowerCase()==subs[i].topic.toLowerCase())
+		{
+			// Resubscription
+			reSubs=true;
+			one_subs=subs[i];				
+			break;
+		}
+	}
+	if(!reSubs)	
+	{
+		one_subs={};
+		one_subs.urlWebHub=urlWebSub;
+		one_subs.topic=topic;
+		one_subs.callback=urlWebHook+"?WSId="+webSocketId+"&topic="+md5(topic);
+		one_subs.hub_secret=makeSecret();
+		one_subs.x_api_key=XAPIKey;
+		one_subs.lease_seconds= lease_seconds ? lease_seconds: 20;
+	}	
+	one_subs.reSubs	= reSubs;
+	
+	// Sending a POST message with some headers and with the data in application/x-www-form-urlencoded' format.	
+	var data_post=[];
+	data_post.push("hub.callback=" , encodeURIComponent(one_subs.callback),
+				   "&hub.topic=", encodeURIComponent(one_subs.topic), "&hub.mode=subscribe",
+				   "&hub.lease_seconds=", one_subs.lease_seconds, 
+				   "&hub.secret=", one_subs.hub_secret,
+				   "&webhook.x_api_key=",one_subs.x_api_key);
+		
+	one_subs.ajax=new Ajax();
+	
+	//one_subs.ajax.setAccessToken(obj.accessToken, null);
+	one_subs.ajax.setHandlerErr(ErrorResponseSendSubscription);		
+	
+	one_subs.ajax.doPost(one_subs.urlWebHub, "application/x-www-form-urlencoded; charset=utf-8", data_post.join(""), EvaluateResponseSendSubscription, "text/plain", one_subs);
+	if(!reSubs)	
+		subs.push(one_subs);
+	return;
+}
+
+function parseLink(data) {
+	let arrData = data.split("link:")
+	data = arrData.length == 2 ? arrData[1] : data;
+	let parsed_data = {}
+
+	arrData = data.split(",")
+	let linkInfo;
+	for (var d of arrData) {
+		linkInfo = /<([^>]+)>;\s+rel="([^"]+)"/ig.exec(d);
+		parsed_data[linkInfo[2]] = linkInfo[1];
+	}
+	return parsed_data;
+}
+
+function DiscoverSTATopic(sta_url)
+{
+var url = document.getElementById('url');
+	let xhr = new XMLHttpRequest();
+	xhr.open('HEAD', sta_url, true);
+	xhr.onreadystatechange = function () {
+		if (this.readyState == this.DONE) {
+			var links = parseLink(this.getResponseHeader('link'));
+			console.log(links);
+			webSubURLToSubscribe.value = links['hub'];
+			topicToSubscribe.value = links['self'];
+		}
+	}
+	xhr.send()
+}
+
+</script>
+</head>
+<body onLoad="setTimeout(initVars(),30);">
+
+<table width="100%"><tr>
+<td width="25%"><img src="imgs/main_logo.png" alt="CitiObs" height="60px" border="0"></td>
+<td><h1>MiraMon OGC STA Subscription Client <br> From MiraMon WebHook to Secure Dimensions WebHub</h1></td>
+<td><img src="imgs/miramon_200.png" alt="MiraMon" height="100px" border="0"></td>
+</tr></table>
+
+
+
+<div id="content" name="content">
+<form name="WSConnection" onSubmit="return false;">
+	<fieldset>
+		<legend>WebHook server</legend>
+		<div>
+			<label>URL:</label>
+			<input type="text" id="serverUrl" name="serverUrl" value="ws://localhost/WSMM"/>
+			<button id="connectButton" name="connectButton" onClick="createWS(document.WSConnection.serverUrl.value);">Open</button>
+			<button id="disconnectButton" name="disconnectButton" onClick="closeWS();">Close</button>
+		</div>
+		<div>
+			<label>Status:</label>
+			<span id="connectionStatus" name="connectionStatus">CLOSED</span>
+		</div>
+	</fieldset>
+	<fieldset id="requestArea" name="requestArea">
+		<legend>Send Message to WebSocket</legend>
+		<div>
+			<textarea id="sendMessage" name="sendMessage" disabled="disabled"></textarea>
+		</div>
+		<div>
+			<button id="sendButton" name="sendButton" disabled="disabled" onClick="sendMessageToWS();">Send</button>			
+		</div>
+	</fieldset>
+	<fieldset id="subscriptionArea" name="subscriptionArea" class="grid-area">
+		<legend>Subscription/UnSubcription of STA Topics</legend>
+		
+		<div>
+		<fieldset id="subsTopicArea" name="subsTopicArea" class="subsArea">
+			<legend>Subscription</legend>
+			<div>
+				<fieldset id="discTopicArea" name="discTopicArea">
+					<legend>Discovery</legend>
+					<label>STA URL: </label>
+					<input type="text" id="topicURLToDiscovery" name="topicURLToDiscovery" style="width:500px"; disabled="disabled"/>
+					<button id="discoverySubscription" name="discoverySubscription" disabled="disabled" onClick="DiscoverSTATopic(document.WSConnection.topicURLToDiscovery.value);">Discover Topic</button>
+				</fieldset>
+			</div>
+			<div>
+			<fieldset id="discTopicArea" name="discTopicArea">
+				<legend>Information collected from the discovery</legend>
+				<div>
+				<!--textarea id="topicToSubscribe" name="topicToSubscribe" disabled="disabled"></textarea-->
+				<label>WebSub Hub URL: </label>
+				<input type="text" id="webSubURLToSubscribe" name="webSubURLToSubscribe" style="width:500px"; disabled="disabled" readonly />
+				<br/>
+				<label>Topic to subscribe: </label>
+				<input type="text" id="topicToSubscribe" name="topicToSubscribe" style="width:500px"; disabled="disabled" readonly />				
+				<button id="sendSubscription" name="sendSubscription" disabled="disabled" onClick="SubscribeTopicToWebHub(document.WSConnection.webSubURLToSubscribe.value, document.WSConnection.topicToSubscribe.value);">Send Subscription</button>
+				</div>
+			</fieldset>
+		</fieldset>
+		</div>
+		
+		<div>
+		<fieldset id="unsubsTopicArea" name="unsubsTopicArea" class="subsArea" style="vertical-align:top">
+			<legend>List of active subscriptions</legend>
+			<table><tr>
+				<td>
+				<select id="listTopicSubscribe" name="listTopicSubscribe" size="5">					
+				</select>
+				</td>
+				<td style="vertical-align:top;">
+				<button style="vertical-align:top" id="sendReSubscription" name="sendReSubscription" disabled="disabled" onClick="SubscribeTopicToWebHub(document.WSConnection.webSubURLToSubscribe.value, document.WSConnection.listTopicSubscribe.options[document.WSConnection.listTopicSubscribe.options.selectedIndex].text);">Resubscribe selected topic</button><br>
+				<button style="vertical-align:top" id="sendUnSubscription" name="sendUnSubscription" disabled="disabled" onClick="UnSubscribeTopicToWebHub(document.WSConnection.listTopicSubscribe.options.selectedIndex);">UnSubscribe selected topic</button>
+				</td>
+			</tr></table>
+			</div>
+		</fieldset>
+		</div>
+	</fieldset>
+	<fieldset id="messageArea" name="messageArea">
+		<legend>Message Log <button id="clearMessage" name="clearMessage" onclick="clearMessagesWindow();">Clear</button></legend>
+		<div id="messages" name="messages"></div>
+	</fieldset>
+</form>
+</div>
+
+</body>
+</html>

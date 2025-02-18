@@ -1,0 +1,102 @@
+body {
+	width: 100%;	
+	color: #000;
+	background-color: #eee;
+	font-size: 10pt;
+}
+
+fieldset {
+	margin-bottom: 10px;
+	padding: 5px 10px;
+	border: 1px solid #777;
+	
+}
+
+legend {
+	padding: 0 5px;
+	color: #777;
+	font-size: 11pt;
+	font-weight: bold;
+}
+
+
+.grid-area{
+	display: grid;
+	grid-template-columns: auto auto;	
+	align-items: stretch;
+}
+
+.subsArea {
+	margin-bottom: 10px;
+	padding: 5px 10px;
+	border: 1px solid #777;			
+	height: 90%;
+}
+
+label {
+	color: #777;
+	font-weight: bold;
+}
+
+#connectionStatus {
+	font-weight: bold;
+}
+
+#content {
+	padding: 10px;
+}
+
+#serverUrl {
+	width: 225px;
+	padding: 1px 3px;
+	border: 1px solid #999;
+}
+
+#disconnectButton {
+	display: none;
+}
+
+#requestArea textarea {
+	min-width: 500px;
+	height: 100px;
+	padding: 0 3px;
+	line-height: 150%;
+}
+
+#subscriptionArea textarea {
+	min-width: 500px;
+	height: 100px;
+	padding: 0 3px;
+	line-height: 150%;
+}
+
+#listTopicSubscribe {
+	min-width: 500px;
+}
+
+#messages {
+	height: 300px;
+	margin: 5px 0;
+	padding: 0 5px;
+	overflow: auto;
+	border: 1px dotted #777;
+	background-color: #fff;
+	line-height: 150%;
+}
+
+#messages pre {
+	width: 100%;
+	color: #000;
+}
+
+#messages pre.sent {
+	color: #8e44ad ;
+}
+
+#messages span.sent {
+	color: #8e44ad ;
+}
+
+#messages span.error {
+	color: #FF0000 ;
+}
