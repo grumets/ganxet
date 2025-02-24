@@ -139,7 +139,12 @@ async function onWSMessage (event) {
 	var data=await event.data;
 	if(messages)
 	{
-		var data_json=JSON.parse(data);
+		var data_json;
+		try {
+			data_json=JSON.parse(data);
+		} catch (e) {
+			data_json=null;
+		}
 		if(data_json)
 		{
 			if(data_json.webSocketId)
