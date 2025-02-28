@@ -589,7 +589,8 @@ var topic=document.WSConnection.listTopicSubscribe.options[selectedIndex].text;
 	// Sending a POST message with some headers and with the data in application/x-www-form-urlencoded' format.		
 	var data_post=[];
 	data_post.push("hub.callback=" , encodeURIComponent(one_subs.callback),
-				   "&hub.topic=", encodeURIComponent(one_subs.topic), "&hub.mode=unsubscribe",
+				   "&hub.topic=", encodeURIComponent(one_subs.topic), 
+				   "&hub.mode=unsubscribe",
 				   "&hub.secret=", one_subs.hub_secret,
 				   "&webhook.x_api_key=",one_subs.x_api_key);
 	
@@ -633,7 +634,8 @@ function SubscribeTopicToWebHub(urlWebSub, topic, lease_seconds){
 	// Sending a POST message with some headers and with the data in application/x-www-form-urlencoded' format.	
 	var data_post=[];
 	data_post.push("hub.callback=" , encodeURIComponent(one_subs.callback),
-				   "&hub.topic=", encodeURIComponent(one_subs.topic), "&hub.mode=subscribe",
+				   "&hub.topic=", encodeURIComponent(one_subs.topic), 
+				   "&hub.mode=subscribe",
 				   "&hub.lease_seconds=", one_subs.lease_seconds, 
 				   "&hub.secret=", one_subs.hub_secret,
 				   "&webhook.x_api_key=",one_subs.x_api_key);
@@ -735,10 +737,10 @@ var url = document.getElementById('url');
 				<div>
 				<!--textarea id="topicToSubscribe" name="topicToSubscribe" disabled="disabled"></textarea-->
 				<label>WebSub Hub URL: </label>
-				<input type="text" id="webSubURLToSubscribe" name="webSubURLToSubscribe" style="width:500px"; disabled="disabled" readonly />
+				<input type="text" id="webSubURLToSubscribe" name="webSubURLToSubscribe" style="width:500px"; disabled="disabled" />
 				<br/>
 				<label>Topic to subscribe: </label>
-				<input type="text" id="topicToSubscribe" name="topicToSubscribe" style="width:500px"; disabled="disabled" readonly />				
+				<input type="text" id="topicToSubscribe" name="topicToSubscribe" style="width:500px"; disabled="disabled" />				
 				<button id="sendSubscription" name="sendSubscription" disabled="disabled" onClick="SubscribeTopicToWebHub(document.WSConnection.webSubURLToSubscribe.value, document.WSConnection.topicToSubscribe.value);">Send Subscription</button>
 				</div>
 			</fieldset>
