@@ -1667,7 +1667,7 @@ HRESULT SendTextMessageToWebHub(IHttpResponse* pHttpResponse, const char* sztext
 HRESULT SendSimpleTextMessageResponseToWebHub(IHttpResponse* pHttpResponse, USHORT statusCode, HRESULT hrErrorToReport, const char* sztext, DWORD* pcbSent, int requestNumber)
 {
     // Set the "Content-Type" header.
-    char szContentType[] = "text/plain;charset=UTF-8";
+    char szContentType[] = "text/plain;charset=utf-8";
     HRESULT hr = pHttpResponse->SetHeader(HttpHeaderContentType, szContentType, (USHORT)strlen(szContentType), TRUE);
     if (FAILED(hr))
     {
@@ -2317,8 +2317,7 @@ BOOL ProcessValidationOfIntentRequestFromServer(IHttpResponse* pHttpResponse, IN
         SendSimpleTextMessageResponseToWebHub(pHttpResponse, 404, NULL, "hub.topic required", NULL, requestNumber);
         return FALSE;
     }
-    
-    if (NULL == GetQueryParameter(szsecret, MAX_LENGTH_SECRET, "hub.secret", szRequest) || *szsecret == '\0')
+    if (mode == MODE_SUBSCRIBE && (NULL == GetQueryParameter(szsecret, MAX_LENGTH_SECRET, "hub.secret", szRequest) || *szsecret == '\0'))
     {
         WriteMessageInDebugFile(__LINE__, "hub.secret required", requestNumber);
         SendSimpleTextMessageResponseToWebHub(pHttpResponse, 404, NULL, "hub.secret required", NULL, requestNumber);
@@ -2697,7 +2696,7 @@ public:
         {
             return RQ_NOTIFICATION_FINISH_REQUEST;
         }
-        sprintf(local_string, "REQUEST method:: %s", pszHttpMethod);
+        sprintf(local_string, "REQUEST method: %s", pszHttpMethod);
         WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
 
         // SCRIPT NAME: We are using the scriptName how a Socket Identifier    
