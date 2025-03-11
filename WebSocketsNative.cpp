@@ -84,7 +84,7 @@ void WriteMessageInDebugFile(int line, const char* szmsg, int requestNumber)
     #endif
 }
 
-
+#ifdef TIMER_SUBS
 // Timer Class
 // Extract from: https://stackoverflow.com/questions/71598718/timer-with-stdthread
 #include <thread>
@@ -151,6 +151,8 @@ void Timer::stop()
     mRunning = false;
     mThread.~thread();
 }
+#endif // #ifdef TIMER_SUBS
+
 
 // Some definitions
 #define MAX_LENGTH_WEBSOCKET_ID 512
@@ -159,6 +161,8 @@ void Timer::stop()
 #define MAX_LENGTH_XAPIKEY MAX_LENGTH_SECRET 
 #define MAX_LENGTH_CHALLENGE 255
 #define MAX_LENGTH_CALLBACK MAX_LENGTH_TOPIC 
+
+#define MILISECONDS_BETWEEN_PING_MESSAGES 5000
 
 
 char szXAPIKey_Param[] = "webhook.x-api-key";
@@ -190,7 +194,9 @@ struct SUBSCRIPTION
                         measured from the time the verification request was made from the hub to the subscriber.
                         Hubs MUST supply this parameter when hub.mode is set to "subscribe".
                         This parameter MAY be present when hub.mode is "unsubscribe" and MUST be ignored by subscribers in that case.*/
+#ifdef TIMER_SUBS
     Timer tm;
+#endif
 
     //char* xHubSignature; // MUST send a X-Hub-Signature header if the subscription was made with a hub.secret as described in Authenticated Content Distribution.    
                         /* If the subscriber supplied a value for hub.secret in their subscription request, the hub MUST generate an HMAC signature of the payload and
@@ -220,59 +226,62 @@ struct WS_CONNECTION
 {
     char* szWebSocketId; // WebSocket identifier
 
-    // One WS cna be subscribed to one more one topic
-
+    std::chrono::system_clock::time_point last_ping; // Last time from the PING message was sent to the client. We are sending a ping message every MILISECONDS_BETWEEN_PING_MESSAGES
+    BOOL pong_pending;  // There is a pong message pending to receive from the websocket client because it was sent a ping message
+    
+    // One WS can be subscribed to one more one topic
     size_t nSubscriptions = 0;
     size_t max_nSubscriptions = 0;
 #define INCR_SUBSCRIPTIONS 5
     struct SUBSCRIPTION* Subscriptions = NULL;    
 };
 
+// Functions to manage critical sections
 
 CRITICAL_SECTION SubscriptionsSection;
 int SubscriptionsSection_Count = 0;
 
-void EnterCriticalSectionDebug(LPCRITICAL_SECTION SubscriptionsSection, int line, int requestNumber)
+void EnterCriticalSectionDebug(LPCRITICAL_SECTION section, int line, int requestNumber)
 {
     char local_string[512];
-    sprintf(local_string, "I'm trying to go into Critical Section: Comptador: %d",
+    sprintf(local_string, "I'm trying to go into Critical Section: Counter: %d",
         SubscriptionsSection_Count);
     WriteMessageInDebugFile(line, local_string, requestNumber);
-    EnterCriticalSection(SubscriptionsSection);
+    EnterCriticalSection(section);
     SubscriptionsSection_Count++;
-    sprintf(local_string, "I'm in Critical Section: Comptador: %d  LockCount %ld RecursionCount %ld",
+    sprintf(local_string, "I'm in Critical Section: Counter: %d  LockCount %ld RecursionCount %ld",
         SubscriptionsSection_Count,
-        SubscriptionsSection->LockCount, SubscriptionsSection->RecursionCount);
+        section->LockCount, section->RecursionCount);
     WriteMessageInDebugFile(line, local_string, requestNumber);
 }
-BOOL TryEnterCriticalSectionDebug(LPCRITICAL_SECTION SubscriptionsSection, int line, int requestNumber)
+BOOL TryEnterCriticalSectionDebug(LPCRITICAL_SECTION section, int line, int requestNumber)
 {
     char local_string[512];
-    BOOL retorn=TryEnterCriticalSection(SubscriptionsSection);
+    BOOL retorn=TryEnterCriticalSection(section);
     if (retorn == 1)
     {
         SubscriptionsSection_Count++;
-        sprintf(local_string, "I'm in Critical Section (using try): Comptador: %d  LockCount %ld RecursionCount %ld",
+        sprintf(local_string, "I'm in Critical Section (using try): Counter: %d  LockCount %ld RecursionCount %ld",
             SubscriptionsSection_Count,
-            SubscriptionsSection->LockCount, SubscriptionsSection->RecursionCount);
+            section->LockCount, section->RecursionCount);
     }
     else
-        sprintf(local_string, "Escaping Critical Section: Comptador: %d  LockCount %ld RecursionCount %ld",
+        sprintf(local_string, "Escaping Critical Section: Counter: %d  LockCount %ld RecursionCount %ld",
             SubscriptionsSection_Count,
-            SubscriptionsSection->LockCount, SubscriptionsSection->RecursionCount);
+            section->LockCount, section->RecursionCount);
     WriteMessageInDebugFile(line, local_string, requestNumber);
     return retorn;
 }
 
-void LeaveCriticalSectionDebug(LPCRITICAL_SECTION SubscriptionsSection, int line, int requestNumber)
+void LeaveCriticalSectionDebug(LPCRITICAL_SECTION section, int line, int requestNumber)
 {
     char local_string[512];
     
-    LeaveCriticalSection(SubscriptionsSection);
+    LeaveCriticalSection(section);
     SubscriptionsSection_Count--;
-    sprintf(local_string, "I leave Critical Section: Comptador: %d  LockCount %ld RecursionCount %ld",
+    sprintf(local_string, "I leave Critical Section: Counter: %d  LockCount %ld RecursionCount %ld",
         SubscriptionsSection_Count,
-        SubscriptionsSection->LockCount, SubscriptionsSection->RecursionCount);
+        section->LockCount, section->RecursionCount);
     WriteMessageInDebugFile(line, local_string, requestNumber);
 }
 
@@ -286,13 +295,12 @@ int CharToUnicode(LPCSTR lpMultiByteStr, LPWSTR lpWideCharStr, size_t cchWideCha
 int CharToUTF8(LPCSTR CharStr, LPSTR UTF8Str, size_t cchUTF8Str);
 BOOL ExpandAndCopyUTF8FromChar(LPSTR* UTF8Str, size_t* cchUTF8Str, const char* s);
 
-
 // Query functions
 char* GetWebSocketId(char* query, char* szWebSocketId, size_t len);
 char* GetCallBackURL(char* query, char * pszScriptName, char* sz_WebSocketId);
 char* GetQueryParameter(char* value, size_t value_size, const char* name, char* query);
 
-// Functions related with subscriptions and notifications
+// Functions to manage the connections, the subscriptions and the notifications
 struct WS_CONNECTION* GetMemoryWSConnectionIfNeeded(int requestNumber);
 void FreeMemoryAllWSConnections(void);
 void FreeMemoryOfOneWSConnection(size_t i_connec);
@@ -315,7 +323,6 @@ void FreeMemoryOfOneNotification(struct SUBSCRIPTION* subs, size_t i_notif);
 void FreeMemoryAllNotifications(struct SUBSCRIPTION* subs);
 BOOL AddNotificationsToSubscriptions(struct SUBSCRIPTION* subs, char* content_data, int requestNumber);
 BOOL DeleteNotification(struct SUBSCRIPTION* subs, size_t i_notif, int requestNumber);
-
 
 struct WS_CONNECTION* GetMemoryWSConnectionIfNeeded(int requestNumber)
 {
@@ -345,7 +352,6 @@ struct WS_CONNECTION* GetMemoryWSConnectionIfNeeded(int requestNumber)
 
 void FreeMemoryOfOneWSConnection(size_t i_connec)
 {
-
     if (i_connec < nWSConnections && WSConnections)
     {
         if (WSConnections[i_connec].szWebSocketId) {
@@ -368,6 +374,7 @@ void FreeMemoryAllWSConnections(void)
         WSConnections = NULL;
     }
 }
+
 char* CreateWebSocketId(char* WebSocketId, char* szScriptName, int requestNumber)
 {
     sprintf(WebSocketId, "%s_%d", szScriptName, requestNumber);
@@ -378,7 +385,7 @@ struct WS_CONNECTION* GetWSConnection(char* szWebSocketId)
 {
     size_t i_connec;
 
-    // Search the WS connection related to this subscription
+    // Search the WS connection related to this szWebSocketId
     if (!WSConnections)
         return NULL;
 
@@ -400,8 +407,7 @@ size_t i_connec;
 char local_string[512];
 char ws_id[512];
 
-    // Search that there are any WS connection with the same identifier    
-    
+    // Search that there is some WS connection with the same identifier      
     if(NULL!=GetWSConnection(CreateWebSocketId(ws_id, szScriptName, requestNumber)))
     {
         sprintf(local_string, "This WS Connection is already opened: %s", ws_id);
@@ -413,6 +419,8 @@ char ws_id[512];
     i_connec = nWSConnections;
     
     WSConnections[i_connec].szWebSocketId = _strdup(ws_id);
+    WSConnections[i_connec].last_ping= std::chrono::system_clock::now();
+    WSConnections[i_connec].pong_pending = FALSE;
     nWSConnections++;
     return i_connec;
 }
@@ -472,10 +480,10 @@ void FreeMemoryOfOneSubscription(struct WS_CONNECTION* ws, size_t i_subs)
         FreeMemoryAllNotifications(&ws->Subscriptions[i_subs]);
 
 #ifdef TIMER_SUBS
-        WriteMessageInDebugFile(__LINE__, "Vaig a parar el temp", requestNumber);
+        WriteMessageInDebugFile(__LINE__, "Try to stop the timer", requestNumber);
         std::this_thread::sleep_for(std::chrono::seconds(4));
         ws->Subscriptions[i_subs].tm.stop();
-        WriteMessageInDebugFile(__LINE__, "Time stopped", requestNumber);
+        WriteMessageInDebugFile(__LINE__, "Timer stopped", requestNumber);
 #endif
     }
 }
@@ -501,7 +509,7 @@ size_t GetSubscriptionIndiceFromWSConnection(struct WS_CONNECTION* ws, char* szC
         return MAXSIZE_T;
 
     size_t i_subs;
-    // Search that there are any subscription with the same identifier
+    // Searching if there is some subscription with the same identifier
     for (i_subs = 0; i_subs < ws->nSubscriptions; i_subs++)
     {
         if (0 == _stricmp(ws->Subscriptions[i_subs].szCallBackURL, szCallBackURL))
@@ -533,7 +541,7 @@ char local_string[512];
     struct WS_CONNECTION* ws;
     if (NULL == (ws = GetWSConnection(szWebSocketId)))
     {
-        WriteMessageInDebugFile(__LINE__, "Error GetWSConnection", requestNumber);
+        WriteMessageInDebugFile(__LINE__, "Error in GetWSConnection", requestNumber);
         return NULL;
     }
     size_t i_subs = GetSubscriptionIndiceFromWSConnection(ws, szCallBackURL);    
@@ -569,7 +577,7 @@ struct SUBSCRIPTION* AddInfoToSusbcription(char* szWebSocketId, char* szCallBack
 
     if (!subs)
     {
-        WriteMessageInDebugFile(__LINE__, "No subscription ERRROR!!!", requestNumber);
+        WriteMessageInDebugFile(__LINE__, "No subscription. ERRROR!!!", requestNumber);
         return NULL;
     }
 
@@ -624,7 +632,7 @@ BOOL DeleteSubscription(char* szWebSocketId, char * szCallBackURL, int requestNu
     
     FreeMemoryOfOneSubscription(ws, i_subs);
 
-    sprintf(local_string, "Subscription delete %s", szCallBackURL);
+    sprintf(local_string, "Subscription deleted %s", szCallBackURL);
     WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
 
     if (i_subs == ws->nSubscriptions - 1) // last element
@@ -804,6 +812,7 @@ char* DeleteLastCharOfString(char* string, const char c)
    
     return string;
 }
+
 char* strnzcpy(char* dest, const char* src, size_t maxlen)
 {
     size_t i;
@@ -1658,7 +1667,7 @@ HRESULT SendTextMessageToWebHub(IHttpResponse* pHttpResponse, const char* sztext
     hr=pHttpResponse->Flush(false, true, &cbSent, &CompletionExpected);
     if (FAILED(hr))
     {
-        WriteMessageInDebugFile(__LINE__, "Error en enviar el text", requestNumber);
+        WriteMessageInDebugFile(__LINE__, "Error while sendind the text message", requestNumber);
     }
     return hr;
 }
@@ -1720,9 +1729,9 @@ HRESULT SendTextMessageToWebSocketClient(IHttpResponse *pHttpResponse, const cha
         #ifdef _MSC_VER
         #pragma warning( disable : 6386 )
         #endif
-        buffer[1] = (BYTE)len; // NJ: Diu això "Warning	C6386 Buffer overrun while writing to 'buffer':  the writable size is 'len+12' bytes, but '2' bytes might be written."
-        // Pèrquè len és un size_t i en pot valer un numero que necessita dos BYTES però ja hem comprovat que no és així amb la condició anterior 
-        // i per tant desactivo el warning
+        buffer[1] = (BYTE)len; // NJ: The compiler said "Warning C6386 Buffer overrun while writing to 'buffer':  the writable size is 'len+12' bytes, but '2' bytes might be written."
+        // Because "len" is a 'size_t' and can contain a number that needs 2 bytes but it was testes that is a number less 126 and here it is only one BYTE
+        // For this it was desabled this warning
         #ifdef _MSC_VER
         #pragma warning( default : 6386 )
         #endif    
@@ -1779,6 +1788,7 @@ HRESULT SendTextMessageToWebSocketClient(IHttpResponse *pHttpResponse, const cha
     return hr;
 }
 
+
 HRESULT SendJSONToWebSocketClient(IHttpResponse* pHttpResponse, struct WS_CONNECTION *ws, size_t i_subs, size_t i_notif, DWORD* cbSent)
 {
     HRESULT hr;
@@ -1832,6 +1842,56 @@ HRESULT SendFlagMessageToWebSocketClient(IHttpResponse* pHttpResponse, BYTE flag
     return hr;
 }
 
+#define NOT_LAST_PONG_RECEIVED LONG_MIN
+
+long SendPingMessageToWebSocketClientIfNeeded(IHttpResponse* pHttpResponse, char* szWebSocketId, int requestNumber)
+{
+    HRESULT hr;
+
+    if (0 == TryEnterCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber))
+        return 0;
+
+    struct WS_CONNECTION* ws = GetWSConnection(szWebSocketId);
+    if (!ws)
+    {
+        LeaveCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
+        return -1;
+    }
+
+    std::chrono::system_clock::time_point time_now = std::chrono::system_clock::now();
+
+    auto elapsed = time_now - ws->last_ping;
+
+    if (elapsed >= std::chrono::milliseconds(MILISECONDS_BETWEEN_PING_MESSAGES))
+    {
+        if (ws->pong_pending)
+        {
+            // Close the WS connection
+            WriteMessageInDebugFile(__LINE__, "PONG not received", requestNumber);
+            return NOT_LAST_PONG_RECEIVED;
+        }
+        else
+        {
+            ws->pong_pending = TRUE;
+            hr = SendFlagMessageToWebSocketClient(pHttpResponse, FIRST_BYTE_OPCODE_PING);
+            if (FAILED(hr))
+            {
+                LeaveCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
+                WriteMessageInDebugFile(__LINE__, "Error on sending PING message to Web Socket client", requestNumber);
+                return hr;
+            }
+            ws->last_ping = std::chrono::system_clock::now();
+            WriteMessageInDebugFile(__LINE__, "PING send", requestNumber);
+            LeaveCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
+            return hr;
+        }
+    }
+    LeaveCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
+    return 0;
+}
+
+
+
 #define WEB_SOCKET_MESSAGE_TEXT                    0
 #define WEB_SOCKET_MESSAGE_BINARY                  1
 #define WEB_SOCKET_MESSAGE_CONTINUATION            2
@@ -1861,7 +1921,7 @@ int ExtractTextMessageFromWebSocketData(BYTE *buffer, DWORD cbSent, char *szMess
         szMessage[0] = '\0';
         return WEB_SOCKET_MESSAGE_CLOSECONNECTION;
     }
-    if ((buffer[0] & FIRST_BYTE_OPCODE) == FIRST_BYTE_OPCODE_PING) {
+    if ((buffer[0] & FIRST_BYTE_OPCODE) == FIRST_BYTE_OPCODE_PING) {        
         szMessage[0] = '\0';
         return WEB_SOCKET_MESSAGE_PING;
     }
@@ -1943,7 +2003,7 @@ int ExtractTextMessageFromWebSocketData(BYTE *buffer, DWORD cbSent, char *szMess
     return retorn;
 }
 
-BOOL ProcessRequestToWebSocketClient(IHttpResponse* pHttpResponse, void* buffer, DWORD cbSent, int requestNumber)
+BOOL ProcessRequestToWebSocketClient(IHttpResponse* pHttpResponse, char* szWebSocketId, void* buffer, DWORD cbSent, int requestNumber)
 {
 HRESULT hr;
 char local_string[512];
@@ -1963,12 +2023,27 @@ char local_string[512];
     if (retorn == WEB_SOCKET_MESSAGE_PING) {
         //Send a pong
         hr = SendFlagMessageToWebSocketClient(pHttpResponse, FIRST_BYTE_OPCODE_PONG);
-        WriteMessageInDebugFile(__LINE__, "Pong", requestNumber);
+        WriteMessageInDebugFile(__LINE__, "Pong sent", requestNumber);
     }
     else if (retorn == WEB_SOCKET_MESSAGE_PONG)
-        ; //Verify if this was a result of our ping (not implemented yet)
-    else if (retorn == WEB_SOCKET_MESSAGE_BINARY)
+    {
+        WriteMessageInDebugFile(__LINE__, "Before EnterCriticalSectionDebug: Receiving PONG from ProcessRequestToWebSocketClient ", requestNumber); 
+        EnterCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
+        WriteMessageInDebugFile(__LINE__, "After EnterCriticalSectionDebug: Receiving PONG from ProcessRequestToWebSocketClient", requestNumber);
+        struct WS_CONNECTION* ws = GetWSConnection(szWebSocketId);
+        if (!ws)
+        {
+            WriteMessageInDebugFile(__LINE__, "WS was not found", requestNumber);
+            LeaveCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
+            return TRUE;
+        }
+        ws->pong_pending = FALSE;
+        LeaveCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
+    }
+    else if (retorn == WEB_SOCKET_MESSAGE_BINARY) {
         ; //Not implemented
+        WriteMessageInDebugFile(__LINE__, "Message binary not implemented", requestNumber);
+    }
     else if (retorn == WEB_SOCKET_MESSAGE_CONTINUATION) {
         ; //Not implemented
         WriteMessageInDebugFile(__LINE__, "Message continuation not implemented", requestNumber);
@@ -2002,7 +2077,8 @@ BOOL ProcessPostRequestFromServer(IN IHttpContext* pHttpContext, IHttpResponse* 
     
     if (NULL == GetWebSocketId(szRequest, szWebSocketId, MAX_LENGTH_WEBSOCKET_ID))
     {
-        WriteMessageInDebugFile(__LINE__, "No tinc szWebSocketId", requestNumber);
+        sprintf(local_string, "The WS identified by \"%s\" was not found", szWebSocketId);
+        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
         SendSimpleTextMessageResponseToWebHub(pHttpResponse, 404, NULL, "WS for the subscription was not found", NULL, requestNumber);
         return FALSE;
     }
@@ -2012,7 +2088,7 @@ BOOL ProcessPostRequestFromServer(IN IHttpContext* pHttpContext, IHttpResponse* 
         SendSimpleTextMessageResponseToWebHub(pHttpResponse, 404, NULL, "Subscription not found", NULL, requestNumber);
         return FALSE;
     }
-    WriteMessageInDebugFile(__LINE__, "vaig a entrar a EnterCriticalSectionDebug del POST", requestNumber);
+    WriteMessageInDebugFile(__LINE__, "Going to EnterCriticalSectionDebug of POST", requestNumber);
     EnterCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
     struct SUBSCRIPTION* subs = GetSubscription(szWebSocketId, szCallBackURL);
     if(!subs)
@@ -2253,16 +2329,15 @@ BOOL CheckAndSendNotificationsToWebSocketClientIfNeeded(IN IHttpResponse* pHttpR
     if (!ws || !ws->Subscriptions || ws->nSubscriptions < 1)
     {
         LeaveCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
-        sprintf(local_string, "La connexió identificada per %s no s'ha trobat", szWebSocketId);
-        if (WSConnections && WSConnections->szWebSocketId)
-        {
-            sprintf(local_string, "Identificador de WS existent: %s", WSConnections->szWebSocketId);
-            WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
-        }
+        if(!ws)
+            sprintf(local_string, "The connection identified by %s was not found", szWebSocketId);
+        else
+            sprintf(local_string, "Any subscripton for the connection %s was found", szWebSocketId);
+        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
         return FALSE;
     }
     size_t i_subs, i_notif;
-    sprintf(local_string, "WS '%s' - Number of subscriptions %I64u", szWebSocketId, ws->nSubscriptions);
+    sprintf(local_string, "WS identifier '%s' - Number of subscriptions %I64u", szWebSocketId, ws->nSubscriptions);
     WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
     for (i_subs = 0; i_subs < ws->nSubscriptions; i_subs++)
     {        
@@ -2270,7 +2345,7 @@ BOOL CheckAndSendNotificationsToWebSocketClientIfNeeded(IN IHttpResponse* pHttpR
         HRESULT hr;
         if (!ws->Subscriptions[i_subs].Notifications || ws->Subscriptions[i_subs].nNotifications < 1)
         {
-            WriteMessageInDebugFile(__LINE__, "No tinc cap notificacio", requestNumber);
+            WriteMessageInDebugFile(__LINE__, "There is no notification", requestNumber);
             continue;
         }
 
@@ -2363,7 +2438,7 @@ BOOL ProcessValidationOfIntentRequestFromServer(IHttpResponse* pHttpResponse, IN
         if (!DeleteSubscription(szWebSocketId, szCallBackURL, requestNumber))
         {
             char str[512];
-            sprintf(str, "Subscription identified by \'%s\' not founded", szWebSocketId);
+            sprintf(str, "Subscription identified by \'%s\' not found", szWebSocketId);
             SendSimpleTextMessageResponseToWebHub(pHttpResponse, 404, NULL, str, NULL, requestNumber);
             LeaveCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
             free(szCallBackURL);
@@ -2380,7 +2455,7 @@ BOOL ProcessValidationOfIntentRequestFromServer(IHttpResponse* pHttpResponse, IN
         if(NULL==AddInfoToSusbcription(szWebSocketId, szCallBackURL, sztopic, szsecret, szXAPIKey, szchallenge, lease_seconds, TRUE, requestNumber))
         {
             char str[512];            
-            sprintf(str,  "Subscription identified by \'%s\' not founded", szCallBackURL);
+            sprintf(str,  "Subscription identified by \'%s\' not found", szCallBackURL);
             SendSimpleTextMessageResponseToWebHub(pHttpResponse, 404, NULL, str, NULL, requestNumber);
             LeaveCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
             free(szCallBackURL);
@@ -2699,8 +2774,6 @@ public:
         sprintf(local_string, "REQUEST method: %s", pszHttpMethod);
         WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
 
-        // SCRIPT NAME: We are using the scriptName how a Socket Identifier    
-
         // Retrieve the script information.
         char* pszScriptName = GetScriptName(pHttpContext,requestNumber);
         if (!pszScriptName)
@@ -2712,7 +2785,7 @@ public:
         // POST requests
         if (0 == _stricmp(pszHttpMethod, "POST"))
         {            
-            WriteMessageInDebugFile(__LINE__, "Vaig a entrar al POST", requestNumber);
+            WriteMessageInDebugFile(__LINE__, "Going to POST request", requestNumber);
             if(ProcessPostRequestFromServer(pHttpContext, pHttpResponse, pHttpRequest, szquery, pszScriptName, requestNumber))
                 WriteMessageInDebugFile(__LINE__, "Notification added correctly", requestNumber);
             return RQ_NOTIFICATION_FINISH_REQUEST;
@@ -2725,7 +2798,7 @@ public:
             return RQ_NOTIFICATION_FINISH_REQUEST;
         } 
 
-        WriteMessageInDebugFile(__LINE__, "No tinc ni un POST ni un GET, Negociant un WS?", requestNumber);
+        WriteMessageInDebugFile(__LINE__, "I don't have a POST or a GET, Negotiating a WS?", requestNumber);
         
         // GET requests
         /* 1) Handshake from client to server : Websocket connection from client to webhook
@@ -2761,21 +2834,20 @@ public:
             return RQ_NOTIFICATION_FINISH_REQUEST;
         }
 
-        // Creo una nova subscripció de la qual encara no tinc gaire informació
+        // Creating a new WS connection
         EnterCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
-        size_t i_connec = PushNewWSConnection(pszScriptName, requestNumber);
+        size_t i_connec = PushNewWSConnection(pszScriptName, requestNumber);        
         if(i_connec==MAXSIZE_T)
         {
             LeaveCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
-            sprintf(local_string, "The WS Connection is already opened");
             SendSimpleTextMessageResponseToWebHub(pHttpResponse, 500, NULL, "The WS Connection is already opened", NULL, requestNumber);
             return RQ_NOTIFICATION_FINISH_REQUEST;
         }
         strnzcpy(szWebSocketId, WSConnections[i_connec].szWebSocketId, MAX_LENGTH_WEBSOCKET_ID);
         if (*szWebSocketId == '\0')
         {
+            FreeMemoryOfOneWSConnection(i_connec);
             LeaveCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
-            sprintf(local_string, "The WS Connection is already opened");
             SendSimpleTextMessageResponseToWebHub(pHttpResponse, 500, NULL, "The WS Connection is already opened", NULL, requestNumber);
             return RQ_NOTIFICATION_FINISH_REQUEST;
         }
@@ -2820,13 +2892,15 @@ public:
 
         if (FAILED(hr))
         {
+            EnterCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
+            FreeMemoryOfOneWSConnection(i_connec);
+            LeaveCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
             SendSimpleTextMessageResponseToWebHub(pHttpResponse, 500, hr, "Server Error", NULL, requestNumber);
             return RQ_NOTIFICATION_FINISH_REQUEST;
         }
-        // i deixo el canal obert per anar comunicant-me amb el client
+        // and I leave the channel open to keep communicating with the client
         Sleep(100);
 
-        //Si en lloc d'escriure volem llegir s'ha de fer servir ReadEntityBody()
         LPSTR UTF8Str = NULL;
         size_t cchUTF8Str = 0;
         char szmsg[512];
@@ -2835,7 +2909,7 @@ public:
         {
             hr = SendTextMessageToWebSocketClient(pHttpResponse, UTF8Str, &cbSent);
             
-            sprintf(local_string, "Message Sended to WS? %s", SUCCEEDED(hr)? "TRUE" : "FALSE");
+            sprintf(local_string, "Message Sent to WS? %s", SUCCEEDED(hr)? "TRUE" : "FALSE");
             WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
 
             if (FAILED(hr))
@@ -2843,7 +2917,11 @@ public:
                 // Set the HTTP status.
                 if (UTF8Str) { free(UTF8Str); UTF8Str = NULL; }
                 cchUTF8Str = 0;
+                // close the connection and free the memory
                 SendFlagMessageToWebSocketClient(pHttpResponse, FIRST_BYTE_OPCODE_CLOSECONNECTION);
+                EnterCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
+                FreeMemoryOfOneWSConnection(i_connec);
+                LeaveCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
                 return RQ_NOTIFICATION_FINISH_REQUEST;
             }
         }
@@ -2863,7 +2941,11 @@ public:
         cchUTF8Str = 0;
         if (NULL == (buffer = pHttpContext->AllocateRequestMemory(buffer_len)))
         {
+            // close the connection and free the memory
             SendFlagMessageToWebSocketClient(pHttpResponse, FIRST_BYTE_OPCODE_CLOSECONNECTION);
+            EnterCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
+            FreeMemoryOfOneWSConnection(i_connec);
+            LeaveCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
 #ifdef WS_BUFFER_ASYN
             DeleteCriticalSection(&ReceiveBufferSection);
 #endif
@@ -2879,7 +2961,7 @@ public:
             if (!isInAsyncRead)
             {
                 EnterCriticalSection(&ReceiveBufferSection);
-                WriteMessageInDebugFile(__LINE__, "Abans ShaCompletatAsynRequest", requestNumber);
+                WriteMessageInDebugFile(__LINE__, "Before ShaCompletatAsynRequest", requestNumber);
                 if (ShaCompletatAsynRequest)
                 {                                                
                     // Test for an error.
@@ -2891,8 +2973,11 @@ public:
                             // Set the error status.
                             //pProvider->SetErrorStatus(hr);
                             WriteMessageInDebugFile(__LINE__, "(ERROR_HANDLE_EOF != (hr & 0x0000FFFF)", requestNumber);
+                            // close the connection and free the memory
                             SendFlagMessageToWebSocketClient(pHttpResponse, FIRST_BYTE_OPCODE_CLOSECONNECTION);
-                            // End additional processing.
+                            EnterCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
+                            FreeMemoryOfOneWSConnection(i_connec);
+                            LeaveCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
                             LeaveCriticalSection(&ReceiveBufferSection);
                             DeleteCriticalSection(&ReceiveBufferSection);
                             return RQ_NOTIFICATION_FINISH_REQUEST;
@@ -2900,13 +2985,13 @@ public:
                     }
                     if (ReceiveBuffer)
                     {
-                        WriteMessageInDebugFile(__LINE__, "Abans ProcessRequestToWebSocketClient", requestNumber);
-                        if (ProcessRequestToWebSocketClient(pHttpResponse, ReceiveBuffer, cbReceiveBuffer, requestNumber))
+                        WriteMessageInDebugFile(__LINE__, "Before ProcessRequestToWebSocketClient", requestNumber);
+                        if (ProcessRequestToWebSocketClient(pHttpResponse, szWebSocketId, ReceiveBuffer, cbReceiveBuffer, requestNumber))
                         {
                             free(ReceiveBuffer);
                             ReceiveBuffer = NULL;
                             cbReceiveBuffer = 0;
-                            WriteMessageInDebugFile(__LINE__, "ProcessRequestToWebSocketClient", requestNumber);
+                            WriteMessageInDebugFile(__LINE__, "Request not processed on ProcessRequestToWebSocketClient", requestNumber);
                             LeaveCriticalSection(&ReceiveBufferSection);
                             DeleteCriticalSection(&ReceiveBufferSection);
                             return RQ_NOTIFICATION_FINISH_REQUEST;
@@ -2914,7 +2999,7 @@ public:
                         free(ReceiveBuffer);
                         ReceiveBuffer = NULL;
                         cbReceiveBuffer = 0;
-                        WriteMessageInDebugFile(__LINE__, "Despres ProcessRequestToWebSocketClient", requestNumber);
+                        WriteMessageInDebugFile(__LINE__, "After ProcessRequestToWebSocketClient", requestNumber);
                     }                    
                     ShaCompletatAsynRequest = FALSE;
                 }
@@ -2922,7 +3007,7 @@ public:
                 
                 isInAsyncRead = true;
 
-                // Cal que sigui assíncron perquè sinó es queda esperant que rebi alguna cosa i no envia mai res
+                // It needs to be asynchronous because otherwise it just waits for something to be received and never sends anything.
                 pHttpRequest->ReadEntityBody(
                     buffer,
                     buffer_len,
@@ -2964,6 +3049,17 @@ public:
             }
 #endif
             CheckAndSendNotificationsToWebSocketClientIfNeeded(pHttpResponse, szWebSocketId, requestNumber);
+            if (NOT_LAST_PONG_RECEIVED == SendPingMessageToWebSocketClientIfNeeded(pHttpResponse, szWebSocketId, requestNumber))
+            {
+                // A PING message was sent and never responded with a PONG from the client -->
+                // close the connection and free the memory
+                SendFlagMessageToWebSocketClient(pHttpResponse, FIRST_BYTE_OPCODE_CLOSECONNECTION);
+                EnterCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
+                FreeMemoryOfOneWSConnection(i_connec);
+                LeaveCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
+                // End additional processing.
+                return RQ_NOTIFICATION_FINISH_REQUEST;
+            }
         } while (true);
 
 
@@ -2974,7 +3070,7 @@ public:
 #endif
         return RQ_NOTIFICATION_PENDING;
         
-        /* Si no hi havia alguna cosa que m'interessava he tancat el canal
+        /*
         // Return processing to the pipeline.
         DeleteCriticalSection(&ReceiveBufferSection);
         return RQ_NOTIFICATION_CONTINUE;
@@ -3031,20 +3127,6 @@ public:
     {
         UNREFERENCED_PARAMETER(pAllocator);
 
-#ifdef AIXO_ES_FA_PER_CADA_REQUEST_I_NO_POTSER
-        // Init the global variables --> Subscriptions array
-        InitializeCriticalSection(&SubscriptionsSection);
-        /*if (!InitializeCriticalSectionAndSpinCount(&SubscriptionsSection, 0x00000400))
-            return HRESULT_FROM_WIN32(ERROR_NOT_ENOUGH_MEMORY); */
-        EnterCriticalSectionDebug(&SubscriptionsSection, __LINE__);
-        if (NULL == GetMemoryWSConnectionIfNeeded())
-        {
-            LeaveCriticalSectionDebug(&SubscriptionsSection, __LINE__);
-            DeleteCriticalSection(&SubscriptionsSection);
-            return HRESULT_FROM_WIN32(ERROR_NOT_ENOUGH_MEMORY);
-        }
-        LeaveCriticalSectionDebug(&SubscriptionsSection, __LINE__);
-#endif
         // Create a new instance.
         CWebSocketNative* pModule = new CWebSocketNative;
 
@@ -3067,13 +3149,6 @@ public:
     void
         Terminate()
     {
-#ifdef AIXO_ES_FA_PER_CADA_REQUEST_I_NO_POTSER
-        // Removing the memory from the global variables
-        EnterCriticalSectionDebug(&SubscriptionsSection, __LINE__);
-        FreeMemoryAllWSConnections();
-        LeaveCriticalSectionDebug(&SubscriptionsSection, __LINE__);
-        DeleteCriticalSection(&SubscriptionsSection);
-#endif
         // Remove the class from memory.
         delete this;
     }
