@@ -24,6 +24,7 @@
     <ProjectGuid>{40a503cb-d1e7-4911-9ece-25bdb3fd422c}</ProjectGuid>
     <RootNamespace>WebSocketsNative</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+    <ProjectName>Ganxet</ProjectName>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
