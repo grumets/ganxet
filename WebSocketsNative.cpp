@@ -1,4 +1,4 @@
-// Inspired in https://learn.microsoft.com/en-us/previous-versions/iis/smooth-streaming-client/walkthrough-creating-a-request-level-http-module-by-using-native-code
+ï»¿// Inspired in https://learn.microsoft.com/en-us/previous-versions/iis/smooth-streaming-client/walkthrough-creating-a-request-level-http-module-by-using-native-code
 // Modified with https://stackoverflow.com/questions/71376090/iis-native-module-websocket
 // Follows this recomendation https://iis-blogs.azurewebsites.net/jennylaw/iis-and-websockets
 #include "pch.h"
@@ -24,13 +24,21 @@ int Request_Count = 0;
 #define WS_BUFFER_ASYN
 
 // To activate the debug mode in a temporal output define DEBUG_TO_TEMP 
-//#define TEST
+// and initialize the DebugLevel variable with the values â€‹â€‹of the following flags
+
+#define DEBUG_GENERAL_INFO_LEVEL 0x01  // General information
+#define DEBUG_ERROR_INFO_LEVEL   0x02  // Error information
+#define DEBUG_TRACE_INFO_LEVEL   0x04  // Extens information for tracing a problem...
+
 #define DEBUG_TO_TEMP 
 #ifdef DEBUG_TO_TEMP
+BYTE DebugLevel = DEBUG_GENERAL_INFO_LEVEL | DEBUG_ERROR_INFO_LEVEL; // | DEBUG_TRACE_INFO_LEVEL;
 char szDebugFile[21] = "c://temp//output.txt" ;
 std::ofstream outputFile;
 
 CRITICAL_SECTION DebugFileSection;
+#else
+BYTE DebugLevel= 0;
 #endif //DEBUG_TO_TEMP
 
 template <typename T>
@@ -242,18 +250,25 @@ CRITICAL_SECTION SubscriptionsSection;
 int SubscriptionsSection_Count = 0;
 
 void EnterCriticalSectionDebug(LPCRITICAL_SECTION section, int line, int requestNumber)
-{
+{    
     char local_string[512];
-    sprintf(local_string, "I'm trying to go into Critical Section: Counter: %d",
-        SubscriptionsSection_Count);
-    WriteMessageInDebugFile(line, local_string, requestNumber);
+    if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+    {
+        sprintf(local_string, "I'm trying to go into Critical Section: Counter: %d",
+            SubscriptionsSection_Count);
+        WriteMessageInDebugFile(line, local_string, requestNumber);
+    }
     EnterCriticalSection(section);
     SubscriptionsSection_Count++;
-    sprintf(local_string, "I'm in Critical Section: Counter: %d  LockCount %ld RecursionCount %ld",
-        SubscriptionsSection_Count,
-        section->LockCount, section->RecursionCount);
-    WriteMessageInDebugFile(line, local_string, requestNumber);
+    if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+    {
+        sprintf(local_string, "I'm in Critical Section: Counter: %d  LockCount %ld RecursionCount %ld",
+            SubscriptionsSection_Count,
+            section->LockCount, section->RecursionCount);
+        WriteMessageInDebugFile(line, local_string, requestNumber);
+    }
 }
+
 BOOL TryEnterCriticalSectionDebug(LPCRITICAL_SECTION section, int line, int requestNumber)
 {
     char local_string[512];
@@ -261,28 +276,36 @@ BOOL TryEnterCriticalSectionDebug(LPCRITICAL_SECTION section, int line, int requ
     if (retorn == 1)
     {
         SubscriptionsSection_Count++;
-        sprintf(local_string, "I'm in Critical Section (using try): Counter: %d  LockCount %ld RecursionCount %ld",
-            SubscriptionsSection_Count,
-            section->LockCount, section->RecursionCount);
+        if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+            sprintf(local_string, "I'm in Critical Section (using try): Counter: %d  LockCount %ld RecursionCount %ld",
+                SubscriptionsSection_Count,
+                section->LockCount, section->RecursionCount);
     }
     else
-        sprintf(local_string, "Escaping Critical Section: Counter: %d  LockCount %ld RecursionCount %ld",
-            SubscriptionsSection_Count,
-            section->LockCount, section->RecursionCount);
-    WriteMessageInDebugFile(line, local_string, requestNumber);
+    {
+        if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+            sprintf(local_string, "Escaping Critical Section: Counter: %d  LockCount %ld RecursionCount %ld",
+                SubscriptionsSection_Count,
+                section->LockCount, section->RecursionCount);
+    }
+    if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+        WriteMessageInDebugFile(line, local_string, requestNumber);
     return retorn;
 }
 
 void LeaveCriticalSectionDebug(LPCRITICAL_SECTION section, int line, int requestNumber)
 {
-    char local_string[512];
+char local_string[512];
     
     LeaveCriticalSection(section);
     SubscriptionsSection_Count--;
-    sprintf(local_string, "I leave Critical Section: Counter: %d  LockCount %ld RecursionCount %ld",
-        SubscriptionsSection_Count,
-        section->LockCount, section->RecursionCount);
-    WriteMessageInDebugFile(line, local_string, requestNumber);
+    if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+    {
+        sprintf(local_string, "I leave Critical Section: Counter: %d  LockCount %ld RecursionCount %ld",
+            SubscriptionsSection_Count,
+            section->LockCount, section->RecursionCount);
+        WriteMessageInDebugFile(line, local_string, requestNumber);
+    }
 }
 
 // General functions
@@ -332,7 +355,8 @@ struct WS_CONNECTION* GetMemoryWSConnectionIfNeeded(int requestNumber)
         max_nWSConnections = INCR_WSCONNECTION;
         if (NULL == (WSConnections = (struct WS_CONNECTION*)calloc(max_nWSConnections, sizeof(*WSConnections))))
         {
-            WriteMessageInDebugFile(__LINE__, "Not enought memory", requestNumber);
+            if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+                WriteMessageInDebugFile(__LINE__, "Not enought memory", requestNumber);
             return NULL;
         }
     }
@@ -342,7 +366,8 @@ struct WS_CONNECTION* GetMemoryWSConnectionIfNeeded(int requestNumber)
         max_nWSConnections += INCR_WSCONNECTION;        
         if (NULL == (p = (struct WS_CONNECTION*)recalloc(WSConnections, max_nWSConnections * sizeof(*WSConnections), nWSConnections * sizeof(*WSConnections))))
         {
-            WriteMessageInDebugFile(__LINE__, "Not enought memory", requestNumber);
+            if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+                WriteMessageInDebugFile(__LINE__, "Not enought memory", requestNumber);
             return NULL;
         }        
         WSConnections = p;
@@ -410,8 +435,11 @@ char ws_id[512];
     // Search that there is some WS connection with the same identifier      
     if(NULL!=GetWSConnection(CreateWebSocketId(ws_id, szScriptName, requestNumber)))
     {
-        sprintf(local_string, "This WS Connection is already opened: %s", ws_id);
-        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+        {
+            sprintf(local_string, "This WS Connection is already opened: %s", ws_id);
+            WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        }
         return MAXSIZE_T;
     }
     // Push a new one
@@ -435,7 +463,8 @@ struct SUBSCRIPTION* GetMemoryForSubscriptionIfNeeded(struct WS_CONNECTION* ws, 
         ws->max_nSubscriptions = INCR_SUBSCRIPTIONS;
         if (NULL == (ws->Subscriptions = (struct SUBSCRIPTION*)calloc(ws->max_nSubscriptions, sizeof(*ws->Subscriptions))))
         {
-            WriteMessageInDebugFile(__LINE__, "Not enought memory", requestNumber);
+            if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+                WriteMessageInDebugFile(__LINE__, "Not enought memory", requestNumber);
             return NULL;
         }
     }
@@ -445,7 +474,8 @@ struct SUBSCRIPTION* GetMemoryForSubscriptionIfNeeded(struct WS_CONNECTION* ws, 
         ws->max_nSubscriptions += INCR_SUBSCRIPTIONS;
         if (NULL == (p = (struct SUBSCRIPTION*)recalloc(ws->Subscriptions, ws->max_nSubscriptions * sizeof(*ws->Subscriptions), ws->nSubscriptions * sizeof(*ws->Subscriptions))))
         {
-            WriteMessageInDebugFile(__LINE__, "Not enought memory", requestNumber);
+            if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+                WriteMessageInDebugFile(__LINE__, "Not enought memory", requestNumber);
             return NULL;
         }
         ws->Subscriptions = p;
@@ -480,10 +510,12 @@ void FreeMemoryOfOneSubscription(struct WS_CONNECTION* ws, size_t i_subs)
         FreeMemoryAllNotifications(&ws->Subscriptions[i_subs]);
 
 #ifdef TIMER_SUBS
-        WriteMessageInDebugFile(__LINE__, "Try to stop the timer", requestNumber);
+        if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+            WriteMessageInDebugFile(__LINE__, "Try to stop the timer", requestNumber);
         std::this_thread::sleep_for(std::chrono::seconds(4));
         ws->Subscriptions[i_subs].tm.stop();
-        WriteMessageInDebugFile(__LINE__, "Timer stopped", requestNumber);
+        if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+            WriteMessageInDebugFile(__LINE__, "Timer stopped", requestNumber);
 #endif
     }
 }
@@ -541,14 +573,18 @@ char local_string[512];
     struct WS_CONNECTION* ws;
     if (NULL == (ws = GetWSConnection(szWebSocketId)))
     {
-        WriteMessageInDebugFile(__LINE__, "Error in GetWSConnection", requestNumber);
+        if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+            WriteMessageInDebugFile(__LINE__, "Error in GetWSConnection", requestNumber);
         return NULL;
     }
     size_t i_subs = GetSubscriptionIndiceFromWSConnection(ws, szCallBackURL);    
     if (i_subs!=MAXSIZE_T)
     {
-        sprintf(local_string, "Subscription: %s", szCallBackURL);
-        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        if (DebugLevel & DEBUG_GENERAL_INFO_LEVEL)
+        {
+            sprintf(local_string, "Subscription: %s", szCallBackURL);
+            WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        }
         return ws->Subscriptions+i_subs;
     }
     // Push a new one    
@@ -564,25 +600,31 @@ struct SUBSCRIPTION* AddInfoToSusbcription(char* szWebSocketId, char* szCallBack
 {
     struct SUBSCRIPTION* subs;
     char local_string[512];
-
-    WriteMessageInDebugFile(__LINE__, "Before GetSubscription", requestNumber);
+    if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+        WriteMessageInDebugFile(__LINE__, "Before GetSubscription", requestNumber);
     subs = GetSubscription(szWebSocketId, szCallBackURL);
-    WriteMessageInDebugFile(__LINE__, "After GetSubscription", requestNumber);
+    if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+        WriteMessageInDebugFile(__LINE__, "After GetSubscription", requestNumber);
     if (!subs && create_new_subsc)
     {
-        WriteMessageInDebugFile(__LINE__, "Before PushNewSubscription", requestNumber);
+        if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+            WriteMessageInDebugFile(__LINE__, "Before PushNewSubscription", requestNumber);
         subs = PushNewSubscription(szWebSocketId, szCallBackURL, requestNumber);
-        WriteMessageInDebugFile(__LINE__, "After PushNewSubscription", requestNumber);
+        if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+            WriteMessageInDebugFile(__LINE__, "After PushNewSubscription", requestNumber);
     }
 
     if (!subs)
     {
-        WriteMessageInDebugFile(__LINE__, "No subscription. ERRROR!!!", requestNumber);
+        if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+            WriteMessageInDebugFile(__LINE__, "No subscription. ERRROR!!!", requestNumber);
         return NULL;
     }
-
-    sprintf(local_string, "Subscription inserted %s %s", szWebSocketId, szCallBackURL);
-    WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+    if (DebugLevel & DEBUG_GENERAL_INFO_LEVEL)
+    {
+        sprintf(local_string, "Subscription inserted %s %s", szWebSocketId, szCallBackURL);
+        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+    }
     // Adding the information to subscription
     if (subs->szSecret)
     {
@@ -631,9 +673,12 @@ BOOL DeleteSubscription(char* szWebSocketId, char * szCallBackURL, int requestNu
         return FALSE;
     
     FreeMemoryOfOneSubscription(ws, i_subs);
-
-    sprintf(local_string, "Subscription deleted %s", szCallBackURL);
-    WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+    
+    if (DebugLevel & DEBUG_GENERAL_INFO_LEVEL)
+    {
+        sprintf(local_string, "Subscription deleted %s", szCallBackURL);
+        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+    }
 
     if (i_subs == ws->nSubscriptions - 1) // last element
     {
@@ -667,9 +712,11 @@ BOOL DeleteNotification(struct SUBSCRIPTION* subs, size_t i_notif, int requestNu
         subs->nNotifications--;
         memset(&subs->Notifications[subs->nNotifications], 0, sizeof(*subs->Notifications));
     }
-
-    sprintf(local_string, "Notification deleted %I64u/%I64u", i_notif, subs->nNotifications);
-    WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+    if (DebugLevel & DEBUG_GENERAL_INFO_LEVEL)
+    {
+        sprintf(local_string, "Notification deleted %I64u/%I64u", i_notif, subs->nNotifications);
+        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+    }
     return TRUE;
 }
 
@@ -684,7 +731,8 @@ struct NOTIFICATION* GetMemoryForNotificationsIfNeeded(struct SUBSCRIPTION *subs
         subs->max_nNotificacions = INCR_NOTIFICACIONS;
         if (NULL == (subs->Notifications = (struct NOTIFICATION*)calloc(subs->max_nNotificacions, sizeof(*subs->Notifications))))
         {
-            WriteMessageInDebugFile(__LINE__, "Not enought memory", requestNumber);
+            if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+                WriteMessageInDebugFile(__LINE__, "Not enought memory", requestNumber);
             return NULL;
         }
     }
@@ -694,7 +742,8 @@ struct NOTIFICATION* GetMemoryForNotificationsIfNeeded(struct SUBSCRIPTION *subs
         subs->max_nNotificacions += INCR_NOTIFICACIONS;
         if (NULL == (p = (struct NOTIFICATION*)recalloc(subs->Notifications, subs->max_nNotificacions * sizeof(*subs->Notifications), subs->nNotifications * sizeof(*subs->Notifications))))
         {
-            WriteMessageInDebugFile(__LINE__, "Not enought memory", requestNumber);
+            if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+                WriteMessageInDebugFile(__LINE__, "Not enought memory", requestNumber);
             return NULL;
         }
         subs->Notifications = p;
@@ -742,9 +791,12 @@ BOOL AddNotificationsToSubscriptions(struct SUBSCRIPTION* subs, char *content_da
         return FALSE;
     subs->nNotifications++;
 
-    sprintf(local_string, "Notification created: Number: %I64u", subs->nNotifications - 1);
-    WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
-    WriteMessageInDebugFile(__LINE__, subs->Notifications[subs->nNotifications - 1].dataPost, requestNumber);
+    if (DebugLevel & DEBUG_GENERAL_INFO_LEVEL)
+    {
+        sprintf(local_string, "Notification created: Number: %I64u", subs->nNotifications - 1);
+        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        WriteMessageInDebugFile(__LINE__, subs->Notifications[subs->nNotifications - 1].dataPost, requestNumber);
+    }
     return TRUE;
 }
 
@@ -918,12 +970,7 @@ char* p, * p_ini;
 
     mini_string[2] = '\0';        
     p_ini = query;
-
     
-#ifdef TEST
-    sprintf(local_string, "Searching the key: %s", name);
-    WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
-#endif  //TEST
     for (p = query; *p; p++)
     {
         switch (*p)
@@ -961,10 +1008,6 @@ char* p, * p_ini;
                 if (have_name)
                 {
                     value[i_value] = '\0';
-#ifdef TEST
-                    sprintf(local_string, "Value found:  %s", value);
-                    WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
-#endif  //TEST
                     return value;
                 }
                 check_the_name = TRUE;
@@ -1009,7 +1052,6 @@ char* p, * p_ini;
         {
            if (toupper(name[i_name++]) != toupper(c2))
                check_the_name = FALSE;
-            
         }
         else if (have_name)
         {
@@ -1020,18 +1062,10 @@ char* p, * p_ini;
     if (have_name)
     {
         value[i_value] = '\0';
-#ifdef TEST
-        sprintf(local_string, "Value found:  %s", value);
-        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
-#endif  //TEST   
         return value;
     }
-#ifdef TEST
-    WriteMessageInDebugFile(__LINE__, "Value not found", requestNumber);
-#endif  //TEST
     return NULL;
 }
-
 
 
 // HASH Functions
@@ -1068,17 +1102,20 @@ char local_string[512];
 
     if (!szSecret || !szMessage)
     {
-        WriteMessageInDebugFile(__LINE__, "Error: Not secret nor message", requestNumber);
+        if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+            WriteMessageInDebugFile(__LINE__, "Error: Not secret nor message", requestNumber);
         return NULL;
     }
     if (NULL == (HexSecret = stringToHexa(szSecret)))
     {
-        WriteMessageInDebugFile(__LINE__, "Error converting secret to hex", requestNumber);
+        if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+            WriteMessageInDebugFile(__LINE__, "Error converting secret to hex", requestNumber);
         return NULL;
     }
     if (NULL == (HexMessage = stringToHexa(szMessage)))
     {
-        WriteMessageInDebugFile(__LINE__, "Error converting secret to hex", requestNumber);
+        if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+            WriteMessageInDebugFile(__LINE__, "Error converting secret to hex", requestNumber);
         if (HexSecret) free(HexSecret);
         return NULL;
     }
@@ -1090,8 +1127,11 @@ char local_string[512];
         NULL,
         BCRYPT_ALG_HANDLE_HMAC_FLAG)))
     {
-        sprintf(local_string, "Status %d%s", status, " returned by BCryptOpenAlgorithmProvide");
-        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+        {
+            sprintf(local_string, "Status %d%s", status, " returned by BCryptOpenAlgorithmProvide");
+            WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        }
         return NULL;
     }
 
@@ -1104,8 +1144,11 @@ char local_string[512];
         &cbData,
         0)))
     {
-        sprintf(local_string, "Status %d%s", status, " returned by returned by BCryptGetProperty BCRYPT_OBJECT_LENGTH");
-        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+        {
+            sprintf(local_string, "Status %d%s", status, " returned by returned by BCryptGetProperty BCRYPT_OBJECT_LENGTH");
+            WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        }
         if (hAlg)
             BCryptCloseAlgorithmProvider(hAlg, 0);
         return NULL;
@@ -1115,7 +1158,8 @@ char local_string[512];
     pbHashObject = (PBYTE)HeapAlloc(GetProcessHeap(), 0, cbHashObject);
     if (NULL == pbHashObject)
     {
-        WriteMessageInDebugFile(__LINE__, "Not enough memory for pbHashObject", requestNumber);
+        if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+            WriteMessageInDebugFile(__LINE__, "Not enough memory for pbHashObject", requestNumber);
         if (hAlg)
             BCryptCloseAlgorithmProvider(hAlg, 0);
         if (hHash)
@@ -1134,9 +1178,11 @@ char local_string[512];
         &cbData,
         0)))
     {
-        sprintf(local_string, "Status %d%s", status, " returned by returned by BCryptGetProperty BCRYPT_HASH_LENGTH");
-        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
-
+        if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+        {
+            sprintf(local_string, "Status %d%s", status, " returned by returned by BCryptGetProperty BCRYPT_HASH_LENGTH");
+            WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        }
         if (hAlg)
             BCryptCloseAlgorithmProvider(hAlg, 0);
         if (hHash)
@@ -1150,8 +1196,8 @@ char local_string[512];
     pbHash = (PBYTE)HeapAlloc(GetProcessHeap(), 0, cbHash);
     if (NULL == pbHash)
     {
-        WriteMessageInDebugFile(__LINE__, "Not enough memory for pbHash", requestNumber);
-
+        if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+            WriteMessageInDebugFile(__LINE__, "Not enough memory for pbHash", requestNumber);
         if (hAlg)
             BCryptCloseAlgorithmProvider(hAlg, 0);
         if (hHash)
@@ -1171,9 +1217,11 @@ char local_string[512];
         sizeof(HexSecret),
         0)))
     {
-        sprintf(local_string, "Status %d%s", status, "returned by BCryptCreateHash");
-        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
-
+        if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+        {
+            sprintf(local_string, "Status %d%s", status, "returned by BCryptCreateHash");
+            WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        }
         if (hAlg)
             BCryptCloseAlgorithmProvider(hAlg, 0);
         if (hHash)
@@ -1190,8 +1238,11 @@ char local_string[512];
         sizeof(HexSecret),
         0)))
     {
-        sprintf(local_string, "Status %d%s", status, "returned by BCryptHashData");
-        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+        {
+            sprintf(local_string, "Status %d%s", status, "returned by BCryptHashData");
+            WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        }
         if (hAlg)
             BCryptCloseAlgorithmProvider(hAlg, 0);
         if (hHash)
@@ -1208,9 +1259,11 @@ char local_string[512];
         cbHash,
         0)))
     {
-        sprintf(local_string, "Status %d%s", status, "returned by BCryptFinishHash");
-        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
-
+        if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+        {
+            sprintf(local_string, "Status %d%s", status, "returned by BCryptFinishHash");
+            WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        }
         if (hAlg)
             BCryptCloseAlgorithmProvider(hAlg, 0);
         if (hHash)
@@ -1220,24 +1273,14 @@ char local_string[512];
         return NULL;
     }
 
-    /*printf("The hash is:  ");
-    for (DWORD i = 0; i < cbHash; i++)
+    if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
     {
-        printf("%2.2X-", pbHash[i]);
-    }*/
-#if defined TEST && defined DEBUG_TO_TEMP
-    if (outputFile.is_open()) { // check if the file was opened successfully        
-
-        char str[100];
-        sprintf(str, "The hash is:  ");
+        strcpy(local_string, "The hash is:  ");
         for (DWORD i = 0; i < cbHash; i++)
-        {
-            sprintf(str, "%2.2x ", pbHash[i]);
-        }
-        outputFile << "File: " << __FILE__ << "Line: " << __LINE__ << "hash value: " << pbHash << "\nhash sense w: \n" << str << std::endl; // write data to the file            
-        outputFile.close(); // close the file when done
+            sprintf(local_string+strlen(local_string), "%2.2x ", pbHash[i]);
+        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
     }
-#endif  //DEBUG_TO_TEMP 
+
     if (hAlg)
         BCryptCloseAlgorithmProvider(hAlg, 0);
     if (hHash)
@@ -1286,29 +1329,31 @@ PBYTE CreateHMACHash(BYTE hashAlg, char* szSecret, char* szMessage, int requestN
 
     if (!szSecret || !szMessage)
     {
-        WriteMessageInDebugFile(__LINE__, "Not secret nor message", requestNumber);
+        if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+            WriteMessageInDebugFile(__LINE__, "Not secret nor message", requestNumber);
         return NULL;
     }
     // Converts the secret and the message to hexadecimal 
 
     if (NULL == (HexSecret = stringToHexa(szSecret)))
     {
-        WriteMessageInDebugFile(__LINE__, "Error converting secret to hex", requestNumber);
+        if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+            WriteMessageInDebugFile(__LINE__, "Error converting secret to hex", requestNumber);
         return NULL;
     }
     if (NULL == (HexMessage = stringToHexa(szMessage)))
     {
-        WriteMessageInDebugFile(__LINE__, "Error converting secret to hex", requestNumber);
+        if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+            WriteMessageInDebugFile(__LINE__, "Error converting secret to hex", requestNumber);
         if (HexSecret) free(HexSecret);
         return NULL;
     }
-#ifdef TEST
-    outputFile.open(szDebugFile, std::ofstream::app); 
-    if (outputFile.is_open()) { // check if the file was opened successfully
-        outputFile << "HEX Secret: " << HexSecret << "HEX Message: " << HexMessage << std::endl; // write data to the file
-        outputFile.close(); // close the file when done
+    if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+    {
+        sprintf(local_string, "HEX Secret : %s HexMessage: %s", HexSecret, HexMessage); 
+        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        WriteMessageInDebugFile(__LINE__, (char *)HexMessage, requestNumber);
     }
-#endif  //TEST
 
     //--------------------------------------------------------------------
     // Zero the HMAC_INFO structure and use the hash_alg algorithm for
@@ -1326,7 +1371,8 @@ PBYTE CreateHMACHash(BYTE hashAlg, char* szSecret, char* szMessage, int requestN
         HashAlgid = HASH_ALG_ID_SHA_512;
     else
     {
-        WriteMessageInDebugFile(__LINE__, "HASH algorithm unknowned", requestNumber);
+        if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+            WriteMessageInDebugFile(__LINE__, "HASH algorithm unknowned", requestNumber);
         if (HexMessage) free(HexMessage);
         if (HexSecret) free(HexSecret);
         return pbHash;
@@ -1350,8 +1396,11 @@ PBYTE CreateHMACHash(BYTE hashAlg, char* szSecret, char* szMessage, int requestN
         PROV_RSA_FULL,            // provider type
         CRYPT_VERIFYCONTEXT))     // no key access is requested*/
     {
-        sprintf(local_string, "Error in AcquireContext 0x%08x", GetLastError());
-        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+        {
+            sprintf(local_string, "Error in AcquireContext 0x%08x", GetLastError());
+            WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        }
         if (HexMessage) free(HexMessage);
         if (HexSecret) free(HexSecret);
         return pbHash;
@@ -1374,13 +1423,16 @@ PBYTE CreateHMACHash(BYTE hashAlg, char* szSecret, char* szMessage, int requestN
         0,                        // reserved
         &hHash))                  // address of hash object handle
     {
-        char str2[512];
-        WCHAR wstr2[512];
-        FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, GetLastError(), LANG_SYSTEM_DEFAULT, wstr2, 512, NULL);
-        wcstombs(str2, wstr2, wcslen(wstr2));
-        str2[wcslen(wstr2)] = '\0';
-        sprintf(local_string, "Error in CryptCreateHash 0x%08x %s", GetLastError(), str2);
-        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+        {
+            char str2[512];
+            WCHAR wstr2[512];
+            FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, GetLastError(), LANG_SYSTEM_DEFAULT, wstr2, 512, NULL);
+            wcstombs(str2, wstr2, wcslen(wstr2));
+            str2[wcslen(wstr2)] = '\0';
+            sprintf(local_string, "Error in CryptCreateHash 0x%08x %s", GetLastError(), str2);
+            WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        }
         if (hProv)
             CryptReleaseContext(hProv, 0);
         if (HexMessage) free(HexMessage);
@@ -1394,8 +1446,11 @@ PBYTE CreateHMACHash(BYTE hashAlg, char* szSecret, char* szMessage, int requestN
         sizeof(HexSecret),            // number of bytes of data to add
         0))                       // flags
     {
-        sprintf(local_string, "Error in CryptHashData 0x%08x", GetLastError());
-        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+        {
+            sprintf(local_string, "Error in CryptHashData 0x%08x", GetLastError());
+            WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        }
         if (hHash)
             CryptDestroyHash(hHash);
         if (hProv)
@@ -1412,8 +1467,11 @@ PBYTE CreateHMACHash(BYTE hashAlg, char* szSecret, char* szMessage, int requestN
         0,                        // flags
         &hKey))                   // address of the key handle
     {
-        sprintf(local_string, "Error in CryptDeriveKey 0x%08x", GetLastError());
-        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+        {
+            sprintf(local_string, "Error in CryptDeriveKey 0x%08x", GetLastError());
+            WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        }
         if (hKey)
             CryptDestroyKey(hKey);
         if (hHash)
@@ -1444,8 +1502,11 @@ PBYTE CreateHMACHash(BYTE hashAlg, char* szSecret, char* szMessage, int requestN
         0,                        // reserved
         &hHmacHash))              // address of the hash handle
     {
-        sprintf(local_string, "Error in CryptCreateHash 0x%08x", GetLastError());
-        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+        {
+            sprintf(local_string, "Error in CryptCreateHash 0x%08x", GetLastError());
+            WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        }
         if (hHmacHash)
             CryptDestroyHash(hHmacHash);
         if (hKey)
@@ -1465,8 +1526,11 @@ PBYTE CreateHMACHash(BYTE hashAlg, char* szSecret, char* szMessage, int requestN
         (BYTE*)&HmacInfo,         // the HMAC_INFO object
         0))                       // reserved
     {
-        sprintf(local_string, "Error in CryptSetHashParam 0x%08x", GetLastError());
-        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+        {
+            sprintf(local_string, "Error in CryptSetHashParam 0x%08x", GetLastError());
+            WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        }
         if (hHmacHash)
             CryptDestroyHash(hHmacHash);
         if (hKey)
@@ -1486,8 +1550,11 @@ PBYTE CreateHMACHash(BYTE hashAlg, char* szSecret, char* szMessage, int requestN
         sizeof(HexMessage),            // number of bytes of data to add
         0))                       // flags
     {
-        sprintf(local_string, "Error in CryptHashData 0x%08x", GetLastError());
-        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+        {
+            sprintf(local_string, "Error in CryptHashData 0x%08x", GetLastError());
+            WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        }
         if (hHmacHash)
             CryptDestroyHash(hHmacHash);
         if (hKey)
@@ -1513,8 +1580,11 @@ PBYTE CreateHMACHash(BYTE hashAlg, char* szSecret, char* szMessage, int requestN
         &dwDataLen,               // length, in bytes, of the hash
         0))
     {
-        sprintf(local_string, "Error in CryptGetHashParam 0x%08x", GetLastError());
-        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+        {
+            sprintf(local_string, "Error in CryptGetHashParam 0x%08x", GetLastError());
+            WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        }
         if (hHmacHash)
             CryptDestroyHash(hHmacHash);
         if (hKey)
@@ -1531,7 +1601,8 @@ PBYTE CreateHMACHash(BYTE hashAlg, char* szSecret, char* szMessage, int requestN
     pbHash = (BYTE*)malloc(dwDataLen);
     if (NULL == pbHash)
     {
-        WriteMessageInDebugFile(__LINE__, "Unable to allocate memory", requestNumber);
+        if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+            WriteMessageInDebugFile(__LINE__, "Unable to allocate memory", requestNumber);
         if (hHmacHash)
             CryptDestroyHash(hHmacHash);
         if (hKey)
@@ -1552,8 +1623,11 @@ PBYTE CreateHMACHash(BYTE hashAlg, char* szSecret, char* szMessage, int requestN
         &dwDataLen,                // length, in bytes, of the hash
         0))
     {
-        sprintf(local_string, "Error in CryptGetHashParam 0x%08x", GetLastError());
-        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+        {
+            sprintf(local_string, "Error in CryptGetHashParam 0x%08x", GetLastError());
+            WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        }
         if (hHmacHash)
             CryptDestroyHash(hHmacHash);
         if (hKey)
@@ -1567,22 +1641,14 @@ PBYTE CreateHMACHash(BYTE hashAlg, char* szSecret, char* szMessage, int requestN
         return pbHash;
     }    
     
-    
-#if defined TEST && defined DEBUG_TO_TEMP
+    if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
     // Print the hash to the console.
     {
-        char str[500];
-        sprintf(str, "The hash is:  ");
+        sprintf(local_string, "The hash is:  ");
         for (DWORD i = 0; i < dwDataLen; i++)
-        {
-            sprintf(str, "%2.2x ", pbHash[i]);
-        }
-
-        sprintf(local_string, "Hash:  %s", str);
+            sprintf(local_string +strlen(local_string), "%2.2x ", pbHash[i]);
         WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
     }
-#endif  //DEBUG_TO_TEMP
-
 
     // Free resources.
     if (hHmacHash)
@@ -1638,7 +1704,8 @@ HRESULT SendTextMessageToWebHub(IHttpResponse* pHttpResponse, const char* sztext
 
         if (!ExpandAndCopyUTF8FromChar(&UTF8Str, &cchUTF8Str, sztext) || !UTF8Str)
         {
-            WriteMessageInDebugFile(__LINE__, "Error on ExpandAndCopyUTF8FromChar", requestNumber);
+            if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+                WriteMessageInDebugFile(__LINE__, "Error on ExpandAndCopyUTF8FromChar", requestNumber);
             return S_FALSE;
         }
 
@@ -1658,7 +1725,8 @@ HRESULT SendTextMessageToWebHub(IHttpResponse* pHttpResponse, const char* sztext
         {
             if (UTF8Str)
                 free(UTF8Str);
-            WriteMessageInDebugFile(__LINE__, "Error on WriteEntityChunks", requestNumber);
+            if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+                WriteMessageInDebugFile(__LINE__, "Error on WriteEntityChunks", requestNumber);
             return hr;
         }
         if (UTF8Str)
@@ -1667,7 +1735,10 @@ HRESULT SendTextMessageToWebHub(IHttpResponse* pHttpResponse, const char* sztext
     hr=pHttpResponse->Flush(false, true, &cbSent, &CompletionExpected);
     if (FAILED(hr))
     {
-        WriteMessageInDebugFile(__LINE__, "Error while sendind the text message", requestNumber);
+        if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+            WriteMessageInDebugFile(__LINE__, "Error while sendind the text message", requestNumber);
+        else
+            ;
     }
     return hr;
 }
@@ -1680,14 +1751,16 @@ HRESULT SendSimpleTextMessageResponseToWebHub(IHttpResponse* pHttpResponse, USHO
     HRESULT hr = pHttpResponse->SetHeader(HttpHeaderContentType, szContentType, (USHORT)strlen(szContentType), TRUE);
     if (FAILED(hr))
     {
-        WriteMessageInDebugFile(__LINE__, "Error on SetHeader", requestNumber);
+        if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+            WriteMessageInDebugFile(__LINE__, "Error on SetHeader", requestNumber);
         return hr;
     }
     // Set the HTTP status.
     hr = pHttpResponse->SetStatus(statusCode, "", 0, hrErrorToReport);
     if (FAILED(hr))
     {
-        WriteMessageInDebugFile(__LINE__, "Error on statusCode", requestNumber);
+        if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+            WriteMessageInDebugFile(__LINE__, "Error on statusCode", requestNumber);
         return hr;
     }
     return SendTextMessageToWebHub(pHttpResponse, sztext, pcbSent, requestNumber);
@@ -1867,7 +1940,8 @@ long SendPingMessageToWebSocketClientIfNeeded(IHttpResponse* pHttpResponse, char
         if (ws->pong_pending)
         {
             // Close the WS connection
-            WriteMessageInDebugFile(__LINE__, "PONG not received", requestNumber);
+            if (DebugLevel & DEBUG_GENERAL_INFO_LEVEL)
+                WriteMessageInDebugFile(__LINE__, "PONG not received", requestNumber);
             return NOT_LAST_PONG_RECEIVED;
         }
         else
@@ -1877,11 +1951,13 @@ long SendPingMessageToWebSocketClientIfNeeded(IHttpResponse* pHttpResponse, char
             if (FAILED(hr))
             {
                 LeaveCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
-                WriteMessageInDebugFile(__LINE__, "Error on sending PING message to Web Socket client", requestNumber);
+                if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+                    WriteMessageInDebugFile(__LINE__, "Error on sending PING message to Web Socket client", requestNumber);
                 return hr;
             }
             ws->last_ping = std::chrono::system_clock::now();
-            WriteMessageInDebugFile(__LINE__, "PING send", requestNumber);
+            if (DebugLevel & DEBUG_GENERAL_INFO_LEVEL)
+                WriteMessageInDebugFile(__LINE__, "PING send", requestNumber);
             LeaveCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
             return hr;
         }
@@ -1889,8 +1965,6 @@ long SendPingMessageToWebSocketClientIfNeeded(IHttpResponse* pHttpResponse, char
     LeaveCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
     return 0;
 }
-
-
 
 #define WEB_SOCKET_MESSAGE_TEXT                    0
 #define WEB_SOCKET_MESSAGE_BINARY                  1
@@ -2009,31 +2083,38 @@ HRESULT hr;
 char local_string[512];
     char* szMessage = (char*)malloc(cbSent);
     int retorn = ExtractTextMessageFromWebSocketData((BYTE *)buffer, cbSent, szMessage, cbSent);
-
-    sprintf(local_string, "Extract text response %d", retorn);
-    WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+    if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+    {
+        sprintf(local_string, "Extract text response %d", retorn);
+        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+    }
 
     if (retorn == WEB_SOCKET_MESSAGE_CLOSECONNECTION) {
         //Send a response telling that we will to close
         //Send a pong
         hr = SendFlagMessageToWebSocketClient(pHttpResponse, FIRST_BYTE_OPCODE_CLOSECONNECTION);
-        WriteMessageInDebugFile(__LINE__, "Connection Closed", requestNumber);
+        if (DebugLevel & DEBUG_GENERAL_INFO_LEVEL)
+            WriteMessageInDebugFile(__LINE__, "Connection Closed", requestNumber);
         return TRUE;
     }
     if (retorn == WEB_SOCKET_MESSAGE_PING) {
         //Send a pong
         hr = SendFlagMessageToWebSocketClient(pHttpResponse, FIRST_BYTE_OPCODE_PONG);
-        WriteMessageInDebugFile(__LINE__, "Pong sent", requestNumber);
+        if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+            WriteMessageInDebugFile(__LINE__, "Pong sent", requestNumber);
     }
     else if (retorn == WEB_SOCKET_MESSAGE_PONG)
     {
-        WriteMessageInDebugFile(__LINE__, "Before EnterCriticalSectionDebug: Receiving PONG from ProcessRequestToWebSocketClient ", requestNumber); 
+        if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+            WriteMessageInDebugFile(__LINE__, "Before EnterCriticalSectionDebug: Receiving PONG from ProcessRequestToWebSocketClient ", requestNumber); 
         EnterCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
-        WriteMessageInDebugFile(__LINE__, "After EnterCriticalSectionDebug: Receiving PONG from ProcessRequestToWebSocketClient", requestNumber);
+        if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+            WriteMessageInDebugFile(__LINE__, "After EnterCriticalSectionDebug: Receiving PONG from ProcessRequestToWebSocketClient", requestNumber);
         struct WS_CONNECTION* ws = GetWSConnection(szWebSocketId);
         if (!ws)
         {
-            WriteMessageInDebugFile(__LINE__, "WS was not found", requestNumber);
+            if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+                WriteMessageInDebugFile(__LINE__, "WS was not found", requestNumber);
             LeaveCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
             return TRUE;
         }
@@ -2041,27 +2122,34 @@ char local_string[512];
         LeaveCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
     }
     else if (retorn == WEB_SOCKET_MESSAGE_BINARY) {
-        ; //Not implemented
-        WriteMessageInDebugFile(__LINE__, "Message binary not implemented", requestNumber);
+        //Not implemented
+        if (DebugLevel & DEBUG_GENERAL_INFO_LEVEL)
+            WriteMessageInDebugFile(__LINE__, "Message binary not implemented", requestNumber);
     }
     else if (retorn == WEB_SOCKET_MESSAGE_CONTINUATION) {
-        ; //Not implemented
-        WriteMessageInDebugFile(__LINE__, "Message continuation not implemented", requestNumber);
+        if (DebugLevel & DEBUG_GENERAL_INFO_LEVEL)
+            WriteMessageInDebugFile(__LINE__, "Message continuation not implemented", requestNumber);
     }
     else if (retorn == WEB_SOCKET_MESSAGE_ERROR) {
-        ;
-        WriteMessageInDebugFile(__LINE__, " Error interpreting the incoming message", requestNumber);
+        if (DebugLevel & DEBUG_GENERAL_INFO_LEVEL)
+            WriteMessageInDebugFile(__LINE__, " Error interpreting the incoming message", requestNumber);
     }
     else {
         hr = SendTextMessageToWebSocketClient(pHttpResponse, szMessage, &cbSent);
-        sprintf(local_string, "HRESULT Echo success ? %s", SUCCEEDED(hr) ? "TRUE" : "FALSE");
-        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+        {
+            sprintf(local_string, "HRESULT Echo success ? %s", SUCCEEDED(hr) ? "TRUE" : "FALSE");
+            WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        }
         if (FAILED(hr))
         {
             // Set the HTTP status.
             SendFlagMessageToWebSocketClient(pHttpResponse, FIRST_BYTE_OPCODE_CLOSECONNECTION); 
-            sprintf(local_string, "Error SendTextMessageToWebSocketClient cdSent %ul: %s", cbSent, szMessage);
-            WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+            if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+            {
+                sprintf(local_string, "Error SendTextMessageToWebSocketClient cdSent %ul: %s", cbSent, szMessage);
+                WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+            }
             return TRUE;
         }
     }
@@ -2077,8 +2165,11 @@ BOOL ProcessPostRequestFromServer(IN IHttpContext* pHttpContext, IHttpResponse* 
     
     if (NULL == GetWebSocketId(szRequest, szWebSocketId, MAX_LENGTH_WEBSOCKET_ID))
     {
-        sprintf(local_string, "The WS identified by \"%s\" was not found", szWebSocketId);
-        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+        {
+            sprintf(local_string, "The WS identified by \"%s\" was not found", szWebSocketId);
+            WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        }
         SendSimpleTextMessageResponseToWebHub(pHttpResponse, 404, NULL, "WS for the subscription was not found", NULL, requestNumber);
         return FALSE;
     }
@@ -2088,7 +2179,8 @@ BOOL ProcessPostRequestFromServer(IN IHttpContext* pHttpContext, IHttpResponse* 
         SendSimpleTextMessageResponseToWebHub(pHttpResponse, 404, NULL, "Subscription not found", NULL, requestNumber);
         return FALSE;
     }
-    WriteMessageInDebugFile(__LINE__, "Going to EnterCriticalSectionDebug of POST", requestNumber);
+    if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+        WriteMessageInDebugFile(__LINE__, "Going to EnterCriticalSectionDebug of POST", requestNumber);
     EnterCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
     struct SUBSCRIPTION* subs = GetSubscription(szWebSocketId, szCallBackURL);
     if(!subs)
@@ -2116,9 +2208,11 @@ BOOL ProcessPostRequestFromServer(IN IHttpContext* pHttpContext, IHttpResponse* 
     // Checking the header "X-Hub-Signature"
     if (subs->szSecret) // Secret is optional
     {
-        sprintf(local_string, "Secret: %s", subs->szSecret);
-        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
-
+        if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+        {
+            sprintf(local_string, "Secret: %s", subs->szSecret);
+            WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        }
         char *szXHubSignature = NULL;
         USHORT cchXHubSignature = 0;
 
@@ -2128,7 +2222,8 @@ BOOL ProcessPostRequestFromServer(IN IHttpContext* pHttpContext, IHttpResponse* 
             if (NULL == (pcstr = pHttpRequest->GetHeader("X-Hub-Signature", &cchXHubSignature)))
             {
                 LeaveCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
-                WriteMessageInDebugFile(__LINE__, "'X-Hub-Signature' is missing", requestNumber);
+                if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+                    WriteMessageInDebugFile(__LINE__, "'X-Hub-Signature' is missing", requestNumber);
                 SendSimpleTextMessageResponseToWebHub(pHttpResponse, 507, NULL, "Not enough memory", NULL, requestNumber);
                 free(szCallBackURL);
                 return FALSE;
@@ -2149,15 +2244,19 @@ BOOL ProcessPostRequestFromServer(IN IHttpContext* pHttpContext, IHttpResponse* 
             free(szCallBackURL);
             return FALSE;
         }
-        sprintf(local_string, "X-Hub-Signature: %s", szXHubSignature);
-        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+        {
+            sprintf(local_string, "X-Hub-Signature: %s", szXHubSignature);
+            WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        }
         // Getting the algorithm of the hash
         char* p = strchr(szXHubSignature, '=');
         if (p == NULL)
         {
             LeaveCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
             SendSimpleTextMessageResponseToWebHub(pHttpResponse, 204, NULL, NULL, NULL, requestNumber);
-            WriteMessageInDebugFile(__LINE__, "'X-Hub-Signature' has wrong format", requestNumber);
+            if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+                WriteMessageInDebugFile(__LINE__, "'X-Hub-Signature' has wrong format", requestNumber);
             free(szCallBackURL);
             free(szXHubSignature);
             return FALSE;
@@ -2203,8 +2302,11 @@ BOOL ProcessPostRequestFromServer(IN IHttpContext* pHttpContext, IHttpResponse* 
             return FALSE;
         }
         */
-        sprintf(local_string, "algorithm: %s", alg );
-        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+        {
+            sprintf(local_string, "algorithm: %s", alg);
+            WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        }
         free(alg);
 
         // Getting the message in hexadecimal
@@ -2219,10 +2321,12 @@ BOOL ProcessPostRequestFromServer(IN IHttpContext* pHttpContext, IHttpResponse* 
         }
         memcpy(sig_value, p + 1, len);
         sig_value[len] = '\0';
-        //strcpy(sig_value, p + 1);
-
-        sprintf(local_string, "value of signature: %s", sig_value);
-        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        
+        if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+        {
+            sprintf(local_string, "value of signature: %s", sig_value);
+            WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        }
         free(szXHubSignature);
     }
     else
@@ -2241,7 +2345,8 @@ BOOL ProcessPostRequestFromServer(IN IHttpContext* pHttpContext, IHttpResponse* 
     {
         if (NULL == (szrequest_body = (char*)pHttpContext->AllocateRequestMemory(request_size + 1)))
         {
-            WriteMessageInDebugFile(__LINE__, "Error on pHttpContext->AllocateRequestMemory", requestNumber);
+            if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+                WriteMessageInDebugFile(__LINE__, "Error on pHttpContext->AllocateRequestMemory", requestNumber);
             LeaveCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
             SendSimpleTextMessageResponseToWebHub(pHttpResponse, 507, NULL, "Not enough memory", NULL, requestNumber);
             free(szCallBackURL);
@@ -2253,7 +2358,8 @@ BOOL ProcessPostRequestFromServer(IN IHttpContext* pHttpContext, IHttpResponse* 
         // Test for an error.
         if (FAILED(hr))
         {
-            WriteMessageInDebugFile(__LINE__, "Error on pHttpContext->ReadEntityBody while processing POST request", requestNumber);
+            if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+                WriteMessageInDebugFile(__LINE__, "Error on pHttpContext->ReadEntityBody while processing POST request", requestNumber);
             LeaveCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
             SendSimpleTextMessageResponseToWebHub(pHttpResponse, 500, NULL, "Error on reading the body", NULL, requestNumber);
             free(szCallBackURL);
@@ -2294,8 +2400,11 @@ BOOL ProcessPostRequestFromServer(IN IHttpContext* pHttpContext, IHttpResponse* 
         for (i = 0; i < sizeof(out); i++) {
             snprintf(&computed_sig_value[i * 2], 3, "%02x", out[i]);
         }
-        sprintf(local_string, " value: %s computed values: %s", sig_value, computed_sig_value);
-        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+        {
+            sprintf(local_string, " value: %s computed values: %s", sig_value, computed_sig_value);
+            WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        }
 
         if (0 != strcmp(sig_value, computed_sig_value))
         {
@@ -2324,28 +2433,35 @@ BOOL CheckAndSendNotificationsToWebSocketClientIfNeeded(IN IHttpResponse* pHttpR
 
     if (0 == TryEnterCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber))
         return FALSE;
-    //EnterCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
+    
     struct WS_CONNECTION* ws = GetWSConnection(szWebSocketId);
     if (!ws || !ws->Subscriptions || ws->nSubscriptions < 1)
     {
         LeaveCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
-        if(!ws)
-            sprintf(local_string, "The connection identified by %s was not found", szWebSocketId);
-        else
-            sprintf(local_string, "Any subscripton for the connection %s was found", szWebSocketId);
-        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+        {
+            if (!ws)
+                sprintf(local_string, "The connection identified by %s was not found", szWebSocketId);
+            else
+                sprintf(local_string, "Any subscripton for the connection %s was found", szWebSocketId);
+            WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        }
         return FALSE;
     }
     size_t i_subs, i_notif;
-    sprintf(local_string, "WS identifier '%s' - Number of subscriptions %I64u", szWebSocketId, ws->nSubscriptions);
-    WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+    if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+    {
+        sprintf(local_string, "WS identifier '%s' - Number of subscriptions %I64u", szWebSocketId, ws->nSubscriptions);
+        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+    }
     for (i_subs = 0; i_subs < ws->nSubscriptions; i_subs++)
     {        
         DWORD cbSent = 0;
         HRESULT hr;
         if (!ws->Subscriptions[i_subs].Notifications || ws->Subscriptions[i_subs].nNotifications < 1)
         {
-            WriteMessageInDebugFile(__LINE__, "There is no notification", requestNumber);
+            if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+                WriteMessageInDebugFile(__LINE__, "There is no notification", requestNumber);
             continue;
         }
 
@@ -2354,7 +2470,8 @@ BOOL CheckAndSendNotificationsToWebSocketClientIfNeeded(IN IHttpResponse* pHttpR
         {
             if (ws->Subscriptions[i_subs].Notifications[i_notif].dataPost)
             {
-                WriteMessageInDebugFile(__LINE__, "Before send a dataPost to WS", requestNumber);
+                if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+                    WriteMessageInDebugFile(__LINE__, "Before send a dataPost to WS", requestNumber);
                 cbSent = 0;
                 hr = SendJSONToWebSocketClient(pHttpResponse, ws, i_subs, i_notif, &cbSent);
                 //hr = SendTextMessageToWebSocketClient(pHttpResponse, ws->Subscriptions[i_subs].Notifications[i_notif].dataPost, &cbSent);
@@ -2362,13 +2479,16 @@ BOOL CheckAndSendNotificationsToWebSocketClientIfNeeded(IN IHttpResponse* pHttpR
                 if (FAILED(hr))
                 {
                     LeaveCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
-                    WriteMessageInDebugFile(__LINE__, "After send a dataPost to WS with ERROR", requestNumber);
+                    if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+                        WriteMessageInDebugFile(__LINE__, "After send a dataPost to WS with ERROR", requestNumber);
                     return FALSE;
                 }
-                WriteMessageInDebugFile(__LINE__, "After send a dataPost to WS with OK", requestNumber);
+                if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+                    WriteMessageInDebugFile(__LINE__, "After send a dataPost to WS with OK", requestNumber);
                 if (!DeleteNotification(&ws->Subscriptions[i_subs], i_notif, requestNumber))
                     i_notif++;
-                WriteMessageInDebugFile(__LINE__, "After DeleteNotification", requestNumber);
+                if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+                    WriteMessageInDebugFile(__LINE__, "After DeleteNotification", requestNumber);
             }            
         }    
     }
@@ -2388,13 +2508,15 @@ BOOL ProcessValidationOfIntentRequestFromServer(IHttpResponse* pHttpResponse, IN
     *szsecret = '\0';
     if (NULL == GetQueryParameter(sztopic, MAX_LENGTH_TOPIC, "hub.topic", szRequest) || *sztopic == '\0')
     {
-        WriteMessageInDebugFile(__LINE__, "hub.topic required", requestNumber);
+        if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+            WriteMessageInDebugFile(__LINE__, "hub.topic required", requestNumber);
         SendSimpleTextMessageResponseToWebHub(pHttpResponse, 404, NULL, "hub.topic required", NULL, requestNumber);
         return FALSE;
     }
     if (mode == MODE_SUBSCRIBE && (NULL == GetQueryParameter(szsecret, MAX_LENGTH_SECRET, "hub.secret", szRequest) || *szsecret == '\0'))
     {
-        WriteMessageInDebugFile(__LINE__, "hub.secret required", requestNumber);
+        if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+            WriteMessageInDebugFile(__LINE__, "hub.secret required", requestNumber);
         SendSimpleTextMessageResponseToWebHub(pHttpResponse, 404, NULL, "hub.secret required", NULL, requestNumber);
         return FALSE;
     }
@@ -2409,7 +2531,8 @@ BOOL ProcessValidationOfIntentRequestFromServer(IHttpResponse* pHttpResponse, IN
 #endif
     if (NULL == GetQueryParameter(szchallenge, MAX_LENGTH_CHALLENGE, "hub.challenge", szRequest) || *szchallenge == '\0')
     {
-        WriteMessageInDebugFile(__LINE__, "hub.challenge required", requestNumber);
+        if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+            WriteMessageInDebugFile(__LINE__, "hub.challenge required", requestNumber);
         SendSimpleTextMessageResponseToWebHub(pHttpResponse, 404, NULL, "hub.challenge required", NULL, requestNumber);
         return FALSE;
     }
@@ -2420,15 +2543,18 @@ BOOL ProcessValidationOfIntentRequestFromServer(IHttpResponse* pHttpResponse, IN
 
     if (NULL == GetWebSocketId(szRequest, szWebSocketId, MAX_LENGTH_WEBSOCKET_ID))
     {
-        WriteMessageInDebugFile(__LINE__, "No tinc szWebSocketId", requestNumber);
+        if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+            WriteMessageInDebugFile(__LINE__, "Don't have WebSocket Identifier", requestNumber);
         SendSimpleTextMessageResponseToWebHub(pHttpResponse, 404, NULL, "szWebSocketId required", NULL, requestNumber);
         return FALSE;
     }
-    WriteMessageInDebugFile(__LINE__, "Abans de GetCallBackURL", requestNumber);
+    if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+        WriteMessageInDebugFile(__LINE__, "Before GetCallBackURL", requestNumber);
     char* szCallBackURL = GetCallBackURL(szRequest, pszScriptName, szWebSocketId);
     if(!szCallBackURL)
-    {        
-        WriteMessageInDebugFile(__LINE__, "No tinc GetCallBackURL", requestNumber);
+    {   
+        if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+            WriteMessageInDebugFile(__LINE__, "CallBackURL was not found", requestNumber);
         SendSimpleTextMessageResponseToWebHub(pHttpResponse, 404, NULL, "szCallBackURL required", NULL, requestNumber);
         return FALSE;
     }
@@ -2437,37 +2563,46 @@ BOOL ProcessValidationOfIntentRequestFromServer(IHttpResponse* pHttpResponse, IN
         EnterCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
         if (!DeleteSubscription(szWebSocketId, szCallBackURL, requestNumber))
         {
-            char str[512];
-            sprintf(str, "Subscription identified by \'%s\' not found", szWebSocketId);
-            SendSimpleTextMessageResponseToWebHub(pHttpResponse, 404, NULL, str, NULL, requestNumber);
+            sprintf(local_string, "Subscription identified by \'%s\' not found", szWebSocketId);
+            SendSimpleTextMessageResponseToWebHub(pHttpResponse, 404, NULL, local_string, NULL, requestNumber);
+            if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+                WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
             LeaveCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
             free(szCallBackURL);
             return FALSE;
         }
-        sprintf(local_string, " Subscription %s for Web Socket %s DELETED", szCallBackURL, szWebSocketId);
-        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        if (DebugLevel & DEBUG_GENERAL_INFO_LEVEL)
+        {
+            sprintf(local_string, " Subscription %s for Web Socket %s DELETED", szCallBackURL, szWebSocketId);
+            WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        }
         LeaveCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
     }
     else
     {        
-        WriteMessageInDebugFile(__LINE__, "Before AddInfoToSusbcription", requestNumber);
+        if(DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+            WriteMessageInDebugFile(__LINE__, "Before AddInfoToSusbcription", requestNumber);
         EnterCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
         if(NULL==AddInfoToSusbcription(szWebSocketId, szCallBackURL, sztopic, szsecret, szXAPIKey, szchallenge, lease_seconds, TRUE, requestNumber))
         {
-            char str[512];            
-            sprintf(str,  "Subscription identified by \'%s\' not found", szCallBackURL);
-            SendSimpleTextMessageResponseToWebHub(pHttpResponse, 404, NULL, str, NULL, requestNumber);
+            sprintf(local_string,  "Subscription identified by \'%s\' not found", szCallBackURL);
+            SendSimpleTextMessageResponseToWebHub(pHttpResponse, 404, NULL, local_string, NULL, requestNumber);
+            if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+                WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
             LeaveCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
             free(szCallBackURL);
             return FALSE;
         }
-        sprintf(local_string, "Subscription %s for topic %s DONE", szCallBackURL, sztopic);
-        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
-        sprintf(local_string, "secret %s", szsecret);
-        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
-        sprintf(local_string, "challenge %s lease_seconds %d", szchallenge, lease_seconds);
-        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
-        LeaveCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
+        if (DebugLevel & DEBUG_GENERAL_INFO_LEVEL)
+        {
+            sprintf(local_string, "Subscription %s for topic %s DONE", szCallBackURL, sztopic);
+            WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+            sprintf(local_string, "secret %s", szsecret);
+            WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+            sprintf(local_string, "challenge %s lease_seconds %d", szchallenge, lease_seconds);
+            WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+            LeaveCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
+        }
     }
     free(szCallBackURL);
     SendSimpleTextMessageResponseToWebHub(pHttpResponse, 202, NULL, szchallenge, NULL, requestNumber);
@@ -2493,8 +2628,11 @@ char local_string[512];
         {
             wcstombs(pszScriptName, pwszScriptName, cbScriptName);
             pszScriptName[cbScriptName] = '\0';
-            sprintf(local_string, "Script Name: %s", pszScriptName);
-            WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+            if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+            {
+                sprintf(local_string, "Script Name: %s", pszScriptName);
+                WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+            }
         }
     }
     DeleteLastCharOfString(pszScriptName, '/');
@@ -2503,8 +2641,8 @@ char local_string[512];
 
 BOOL IsAWebHookHandShake(IN IHttpContext* pHttpContext, IN IHttpRequest* pHttpRequest, int requestNumber)
 {
-PCSTR p;
-char local_string[512];
+    PCSTR p;
+    char local_string[512];
 
     // Checking the HTTP version
     USHORT uMajorVersion;
@@ -2512,11 +2650,14 @@ char local_string[512];
     pHttpRequest->GetHttpVersion(&uMajorVersion, &uMinorVersion);
     if (uMajorVersion < 1 || (uMajorVersion == 1 && uMinorVersion < 1))
         return FALSE;
-    sprintf(local_string, "HTTP version: %hu.%hu",uMajorVersion, uMinorVersion);
-    WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+    if (DebugLevel & DEBUG_GENERAL_INFO_LEVEL)
+    {
+        sprintf(local_string, "HTTP version: %hu.%hu", uMajorVersion, uMinorVersion);
+        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+    }
 
     // Checking the header keys
-    char *pszUpgrade, *pszConnection, *pszWebSocketKey, *pszWebSocketVersion;
+    char* pszUpgrade, * pszConnection, * pszWebSocketKey, * pszWebSocketVersion;
     USHORT cchUpgrade = 0, cchConnection = 0, cchWebSocketKey = 0, cchWebSocketVersion = 0;
 
     // Upgrade : websocket
@@ -2537,7 +2678,8 @@ char local_string[512];
         free(pszUpgrade);
         return FALSE;
     }
-    WriteMessageInDebugFile(__LINE__, "Upgrade: websocket", requestNumber);
+    if (DebugLevel & DEBUG_GENERAL_INFO_LEVEL)
+        WriteMessageInDebugFile(__LINE__, "Upgrade: websocket", requestNumber);
     free(pszUpgrade);
 
     // Connection: Upgrade
@@ -2558,7 +2700,7 @@ char local_string[512];
         free(pszConnection);
         return FALSE;
     }
-    
+
     free(pszConnection);
 
     // Sec-WebSocket-Key
@@ -2570,8 +2712,11 @@ char local_string[512];
     if (NULL == (pszWebSocketKey = (char*)malloc((size_t)cchWebSocketKey + 1)))
         return FALSE;
     strcpy(pszWebSocketKey, p);
-    sprintf(local_string, "Sec-WebSocket-Key: %s", pszWebSocketKey);
-    WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+    if (DebugLevel & DEBUG_GENERAL_INFO_LEVEL)
+    {
+        sprintf(local_string, "Sec-WebSocket-Key: %s", pszWebSocketKey);
+        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+    }
     free(pszWebSocketKey);
 
     // Sec-WebSocket-Version : 13
@@ -2582,16 +2727,19 @@ char local_string[512];
         return FALSE;
     if (NULL == (pszWebSocketVersion = (char*)malloc((size_t)cchWebSocketVersion + 1)))
         return FALSE;
-    strcpy(pszWebSocketVersion,p);
-    
+    strcpy(pszWebSocketVersion, p);
+
     // the version must be 13
     if (0 != strcmp(pszWebSocketVersion, "13"))
     {
         free(pszWebSocketVersion);
         return FALSE;
     }
-    sprintf(local_string, "Sec-WebSocket-Version: %s", pszWebSocketVersion);
-    WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+    if (DebugLevel & DEBUG_GENERAL_INFO_LEVEL)
+    {
+        sprintf(local_string, "Sec-WebSocket-Version: %s", pszWebSocketVersion);
+        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+    }
     free(pszWebSocketVersion);
     return TRUE;
 }
@@ -2617,9 +2765,11 @@ char local_string[512];
         // Convert the WCHAR string to a CHAR string.
         wcstombs(szQueryString, pRawRequest->CookedUrl.pFullUrl, len);
         szQueryString[len] = '\0';
-
-        sprintf(local_string, "pRawRequest->CookedUrl.pFullUrl: %s", szQueryString);
-        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+        {
+            sprintf(local_string, "pRawRequest->CookedUrl.pFullUrl: %s", szQueryString);
+            WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        }
         return szQueryString;
     }
     if (pRawRequest->CookedUrl.pQueryString)
@@ -2635,8 +2785,11 @@ char local_string[512];
         // Convert the WCHAR string to a CHAR string.
         wcstombs(szQueryString, pRawRequest->CookedUrl.pQueryString, len);
         szQueryString[len] = '\0';
-        sprintf(local_string, "ppRawRequest->_HTTP_COOKED_URL.pQueryString: %s", szQueryString);
-        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+        {
+            sprintf(local_string, "ppRawRequest->_HTTP_COOKED_URL.pQueryString: %s", szQueryString);
+            WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        }
         return szQueryString;
     }
     return NULL;
@@ -2716,7 +2869,7 @@ public:
         *            hub.secret
         *            hub.challenge
         *            hub.lease-seconds
-        *        - Request-headers: Això no va a la subscripció
+        *        - Request-headers: AixÃ² no va a la subscripciÃ³
         *           x-Hub-Signature
         * 
         *       1.3) Unsubscribe: From WebSub to WebHook: Validation of intent mode=unsubscribe
@@ -2727,7 +2880,7 @@ public:
         *            hub.topic        
         *            hub.secret
         *            hub.challenge
-        *        - Request-headers: Això no va a la subscripció
+        *        - Request-headers: AixÃ² no va a la subscripciÃ³
         *           x-Hub-Signature
         *        
         *        
@@ -2762,8 +2915,11 @@ public:
             pProvider->SetErrorStatus(hr);
             return RQ_NOTIFICATION_FINISH_REQUEST;
         }
-        sprintf(local_string, "Query String: %s", szquery);
-        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        if (DebugLevel & DEBUG_GENERAL_INFO_LEVEL)
+        {
+            sprintf(local_string, "Query String: %s", szquery);
+            WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        }
 
         // Retrieve the HTTP method.
         LPCSTR pszHttpMethod = pHttpRequest->GetHttpMethod();
@@ -2771,34 +2927,43 @@ public:
         {
             return RQ_NOTIFICATION_FINISH_REQUEST;
         }
-        sprintf(local_string, "REQUEST method: %s", pszHttpMethod);
-        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
-
+        if (DebugLevel & DEBUG_GENERAL_INFO_LEVEL)
+        {
+            sprintf(local_string, "REQUEST method: %s", pszHttpMethod);
+            WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        }
         // Retrieve the script information.
         char* pszScriptName = GetScriptName(pHttpContext,requestNumber);
         if (!pszScriptName)
             return RQ_NOTIFICATION_FINISH_REQUEST;
-
-        sprintf(local_string, "pszScriptName: %s", pszScriptName);
-        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        if (DebugLevel & DEBUG_GENERAL_INFO_LEVEL)
+        {
+            sprintf(local_string, "pszScriptName: %s", pszScriptName);
+            WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        }
 
         // POST requests
         if (0 == _stricmp(pszHttpMethod, "POST"))
-        {            
-            WriteMessageInDebugFile(__LINE__, "Going to POST request", requestNumber);
-            if(ProcessPostRequestFromServer(pHttpContext, pHttpResponse, pHttpRequest, szquery, pszScriptName, requestNumber))
-                WriteMessageInDebugFile(__LINE__, "Notification added correctly", requestNumber);
+        {
+            if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+                WriteMessageInDebugFile(__LINE__, "Going to POST request", requestNumber);
+            if (ProcessPostRequestFromServer(pHttpContext, pHttpResponse, pHttpRequest, szquery, pszScriptName, requestNumber))
+            {
+                if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+                    WriteMessageInDebugFile(__LINE__, "Notification added correctly", requestNumber);
+            }
             return RQ_NOTIFICATION_FINISH_REQUEST;
         }
         else if (0 != _stricmp(pszHttpMethod, "GET"))
         {
             sprintf(local_string, "HTTP METHOD: '%s' not supported or implemented", pszHttpMethod);
-            WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+            if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+                WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
             SendSimpleTextMessageResponseToWebHub(pHttpResponse, 405, NULL, local_string, NULL, requestNumber);
             return RQ_NOTIFICATION_FINISH_REQUEST;
         } 
-
-        WriteMessageInDebugFile(__LINE__, "I don't have a POST or a GET, Negotiating a WS?", requestNumber);
+        if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+            WriteMessageInDebugFile(__LINE__, "I don't have a POST or a GET, Negotiating a WS?", requestNumber);
         
         // GET requests
         /* 1) Handshake from client to server : Websocket connection from client to webhook
@@ -2813,13 +2978,15 @@ public:
         {            
             if (0 == _stricmp(value, "subscribe"))
             {
-                WriteMessageInDebugFile(__LINE__, "I receive a REQUEST of ValidationOfIntent for subscribe", requestNumber);
+                if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+                    WriteMessageInDebugFile(__LINE__, "I receive a REQUEST of ValidationOfIntent for subscribe", requestNumber);
                 ProcessValidationOfIntentRequestFromServer(pHttpResponse, pHttpRequest, pszScriptName, szquery, MODE_SUBSCRIBE, requestNumber);
                 return RQ_NOTIFICATION_FINISH_REQUEST;
             }
             else if (0 == _stricmp(value, "unsubscribe"))
             {
-                WriteMessageInDebugFile(__LINE__, "I receive a REQUEST of ValidationOfIntent for UnSubscribe", requestNumber);
+                if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+                    WriteMessageInDebugFile(__LINE__, "I receive a REQUEST of ValidationOfIntent for UnSubscribe", requestNumber);
                 ProcessValidationOfIntentRequestFromServer(pHttpResponse, pHttpRequest, pszScriptName, szquery, MODE_UNSUBSCRIBE, requestNumber);
                 return RQ_NOTIFICATION_FINISH_REQUEST;
             }
@@ -2851,12 +3018,15 @@ public:
             SendSimpleTextMessageResponseToWebHub(pHttpResponse, 500, NULL, "The WS Connection is already opened", NULL, requestNumber);
             return RQ_NOTIFICATION_FINISH_REQUEST;
         }
-        sprintf(local_string, "WS CONNECTION with %s identifier for script %s and %d request pushed", 
-            szWebSocketId, pszScriptName, requestNumber);
-        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        if (DebugLevel & DEBUG_GENERAL_INFO_LEVEL)
+        {
+            sprintf(local_string, "WS CONNECTION with %s identifier for script %s and %d request pushed",
+                szWebSocketId, pszScriptName, requestNumber);
+            WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        }
         LeaveCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
 
-        // Envio la resposta dient que la connexió s'ha establert
+        // Envio la resposta dient que la connexiÃ³ s'ha establert
         pHttpResponse->Clear();
         pHttpResponse->SetStatus(101, "Switching Protocols");
         pHttpResponse->SetHeader(
@@ -2887,9 +3057,11 @@ public:
         BOOL fCompletionExpected = false;
         hr = pHttpResponse->Flush(false, true, &cbSent, &fCompletionExpected);
 
-        sprintf(local_string, "WS CONNECTION for %s created. Flush Success? %s", szWebSocketId, SUCCEEDED(hr) ? "TRUE" : "FALSE");
-        WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
-
+        if (DebugLevel & DEBUG_GENERAL_INFO_LEVEL)
+        {
+            sprintf(local_string, "WS CONNECTION for %s created. Flush Success? %s", szWebSocketId, SUCCEEDED(hr) ? "TRUE" : "FALSE");
+            WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+        }
         if (FAILED(hr))
         {
             EnterCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
@@ -2908,10 +3080,11 @@ public:
         if (ExpandAndCopyUTF8FromChar(&UTF8Str, &cchUTF8Str, szmsg))
         {
             hr = SendTextMessageToWebSocketClient(pHttpResponse, UTF8Str, &cbSent);
-            
-            sprintf(local_string, "Message Sent to WS? %s", SUCCEEDED(hr)? "TRUE" : "FALSE");
-            WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
-
+            if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+            {
+                sprintf(local_string, "Message Sent to WS? %s", SUCCEEDED(hr) ? "TRUE" : "FALSE");
+                WriteMessageInDebugFile(__LINE__, local_string, requestNumber);
+            }
             if (FAILED(hr))
             {
                 // Set the HTTP status.
@@ -2949,7 +3122,8 @@ public:
 #ifdef WS_BUFFER_ASYN
             DeleteCriticalSection(&ReceiveBufferSection);
 #endif
-            WriteMessageInDebugFile(__LINE__, "Error on AllocateRequestMemory for WS message", requestNumber);
+            if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+                WriteMessageInDebugFile(__LINE__, "Error on AllocateRequestMemory for WS message", requestNumber);
             return RQ_NOTIFICATION_FINISH_REQUEST;
         }
 
@@ -2961,7 +3135,8 @@ public:
             if (!isInAsyncRead)
             {
                 EnterCriticalSection(&ReceiveBufferSection);
-                WriteMessageInDebugFile(__LINE__, "Before ShaCompletatAsynRequest", requestNumber);
+                if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+                    WriteMessageInDebugFile(__LINE__, "Before ShaCompletatAsynRequest", requestNumber);
                 if (ShaCompletatAsynRequest)
                 {                                                
                     // Test for an error.
@@ -2972,7 +3147,8 @@ public:
                         {
                             // Set the error status.
                             //pProvider->SetErrorStatus(hr);
-                            WriteMessageInDebugFile(__LINE__, "(ERROR_HANDLE_EOF != (hr & 0x0000FFFF)", requestNumber);
+                            if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+                                WriteMessageInDebugFile(__LINE__, "(ERROR_HANDLE_EOF != (hr & 0x0000FFFF)", requestNumber);
                             // close the connection and free the memory
                             SendFlagMessageToWebSocketClient(pHttpResponse, FIRST_BYTE_OPCODE_CLOSECONNECTION);
                             EnterCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
@@ -2985,13 +3161,15 @@ public:
                     }
                     if (ReceiveBuffer)
                     {
-                        WriteMessageInDebugFile(__LINE__, "Before ProcessRequestToWebSocketClient", requestNumber);
+                        if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+                            WriteMessageInDebugFile(__LINE__, "Before ProcessRequestToWebSocketClient", requestNumber);
                         if (ProcessRequestToWebSocketClient(pHttpResponse, szWebSocketId, ReceiveBuffer, cbReceiveBuffer, requestNumber))
                         {
                             free(ReceiveBuffer);
                             ReceiveBuffer = NULL;
                             cbReceiveBuffer = 0;
-                            WriteMessageInDebugFile(__LINE__, "Request not processed on ProcessRequestToWebSocketClient", requestNumber);
+                            if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+                                WriteMessageInDebugFile(__LINE__, "Request not processed on ProcessRequestToWebSocketClient", requestNumber);
                             LeaveCriticalSection(&ReceiveBufferSection);
                             DeleteCriticalSection(&ReceiveBufferSection);
                             return RQ_NOTIFICATION_FINISH_REQUEST;
@@ -2999,7 +3177,8 @@ public:
                         free(ReceiveBuffer);
                         ReceiveBuffer = NULL;
                         cbReceiveBuffer = 0;
-                        WriteMessageInDebugFile(__LINE__, "After ProcessRequestToWebSocketClient", requestNumber);
+                        if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+                            WriteMessageInDebugFile(__LINE__, "After ProcessRequestToWebSocketClient", requestNumber);
                     }                    
                     ShaCompletatAsynRequest = FALSE;
                 }
@@ -3031,7 +3210,8 @@ public:
                 {
                     // Set the error status.
                     //pProvider->SetErrorStatus(hr);
-                    WriteMessageInDebugFile(__LINE__, "(ERROR_HANDLE_EOF != (hr & 0x0000FFFF)");
+                    if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+                        WriteMessageInDebugFile(__LINE__, "(ERROR_HANDLE_EOF != (hr & 0x0000FFFF)");
                     SendFlagMessageToWebSocketClient(pHttpResponse, FIRST_BYTE_OPCODE_CLOSECONNECTION);
                     // End additional processing.
                     return RQ_NOTIFICATION_FINISH_REQUEST;
@@ -3039,13 +3219,16 @@ public:
             }
             if (buffer)
             {
-                WriteMessageInDebugFile(__LINE__, "Abans ProcessRequestToWebSocketClient");
+                if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+                WriteMessageInDebugFile(__LINE__, "Before ProcessRequestToWebSocketClient");
                 if (ProcessRequestToWebSocketClient(pHttpResponse, buffer, cbSent))
                 {
-                    WriteMessageInDebugFile(__LINE__, "ProcessRequestToWebSocketClient");
+                    if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+                        WriteMessageInDebugFile(__LINE__, "Request not processed on ProcessRequestToWebSocketClient", requestNumber);
                     return RQ_NOTIFICATION_FINISH_REQUEST;
                 }
-                WriteMessageInDebugFile(__LINE__, "Despres ProcessRequestToWebSocketClient");
+                if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+                    WriteMessageInDebugFile(__LINE__, "After ProcessRequestToWebSocketClient");
             }
 #endif
             CheckAndSendNotificationsToWebSocketClientIfNeeded(pHttpResponse, szWebSocketId, requestNumber);
@@ -3086,7 +3269,8 @@ public:
         IN IHttpCompletionInfo* pCompletionInfo
     )
     {        
-        WriteMessageInDebugFile(__LINE__, "HRESULT OnAsyncCompletion a dins", requestNumber);
+        if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+            WriteMessageInDebugFile(__LINE__, "HRESULT OnAsyncCompletion a dins", requestNumber);
         if (pCompletionInfo != NULL)
         {
             if (ReceiveBufferInit)
@@ -3101,7 +3285,8 @@ public:
                     if(NULL!=(ReceiveBuffer = (BYTE*)malloc(cbReceiveBuffer)))
                         memcpy(ReceiveBuffer, buffer, cbReceiveBuffer);
                 }
-                WriteMessageInDebugFile(__LINE__ , "OnAsyncCompletion acabat", requestNumber);
+                if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+                    WriteMessageInDebugFile(__LINE__ , "OnAsyncCompletion finished", requestNumber);
                 ShaCompletatAsynRequest = TRUE;
                 LeaveCriticalSection(&ReceiveBufferSection);
             }
