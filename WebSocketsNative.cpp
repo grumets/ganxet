@@ -2336,37 +2336,74 @@ BOOL ProcessPostRequestFromServer(IN IHttpContext* pHttpContext, IHttpResponse* 
     
 
     // Getting the content of the request
-    char *szrequest_body=NULL;
-    DWORD cbSent, request_size = 100024;
+    char *szrequest_body=NULL, *sz_request_temp=NULL;
+    DWORD cbSent, request_size=0, request_max_size=100024, request_size_temp = 100024;
 
     //request_size=pHttpRequest->GetRemainingEntityBytes();
 
-    if (request_size > 0)
+    if (NULL == (sz_request_temp = (char*)pHttpContext->AllocateRequestMemory(request_size_temp)))
     {
-        if (NULL == (szrequest_body = (char*)pHttpContext->AllocateRequestMemory(request_size + 1)))
-        {
-            if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
-                WriteMessageInDebugFile(__LINE__, "Error on pHttpContext->AllocateRequestMemory", requestNumber);
-            LeaveCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
-            SendSimpleTextMessageResponseToWebHub(pHttpResponse, 507, NULL, "Not enough memory", NULL, requestNumber);
-            free(szCallBackURL);
-            if (sig_value) free(sig_value);
-            return FALSE;
-        }
+        if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+            WriteMessageInDebugFile(__LINE__, "Error on pHttpContext->AllocateRequestMemory", requestNumber);
+        LeaveCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
+        SendSimpleTextMessageResponseToWebHub(pHttpResponse, 507, NULL, "Not enough memory", NULL, requestNumber);
+        free(szCallBackURL);
+        if (sig_value) free(sig_value);
+        return FALSE;
+    }
+    if (NULL == (szrequest_body = (char *)calloc(request_max_size, sizeof(*szrequest_body))))
+    {
+        if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+            WriteMessageInDebugFile(__LINE__, "Error on pHttpContext->AllocateRequestMemory", requestNumber);
+        LeaveCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
+        SendSimpleTextMessageResponseToWebHub(pHttpResponse, 507, NULL, "Not enough memory", NULL, requestNumber);
+        free(szCallBackURL);
+        if (sig_value) free(sig_value);
+        return FALSE;
+    }
+    
+    if (pHttpRequest->GetRemainingEntityBytes() > 0)
+    {
         BOOL fCompletionExpected = false;
-        HRESULT hr = pHttpRequest->ReadEntityBody((void*)szrequest_body, request_size, false, &cbSent, &fCompletionExpected);
-        // Test for an error.
-        if (FAILED(hr))
+        while (pHttpRequest->GetRemainingEntityBytes() != 0)
         {
-            if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
-                WriteMessageInDebugFile(__LINE__, "Error on pHttpContext->ReadEntityBody while processing POST request", requestNumber);
-            LeaveCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
-            SendSimpleTextMessageResponseToWebHub(pHttpResponse, 500, NULL, "Error on reading the body", NULL, requestNumber);
-            free(szCallBackURL);
-            if (sig_value) free(sig_value);
-            return FALSE;
+            HRESULT hr = pHttpRequest->ReadEntityBody((void*)sz_request_temp, request_size_temp, false, &cbSent, &fCompletionExpected);
+            // Test for an error.
+            if (FAILED(hr))
+            {
+                if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+                    WriteMessageInDebugFile(__LINE__, "Error on pHttpContext->ReadEntityBody while processing POST request", requestNumber);
+                LeaveCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
+                SendSimpleTextMessageResponseToWebHub(pHttpResponse, 500, NULL, "Error on reading the body", NULL, requestNumber);
+                free(szrequest_body);
+                free(szCallBackURL);
+                if (sig_value) free(sig_value);
+                return FALSE;
+            }
+            sz_request_temp[cbSent] = '\0';
+            if (request_size + cbSent > request_max_size)
+            {
+                request_max_size =+ cbSent;
+                if (NULL == (szrequest_body = (char*)recalloc(szrequest_body, (size_t)request_max_size + cbSent , request_max_size)))
+                {
+                    if (DebugLevel & DEBUG_ERROR_INFO_LEVEL)
+                        WriteMessageInDebugFile(__LINE__, "Error on pHttpContext->AllocateRequestMemory", requestNumber);
+                    LeaveCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
+                    SendSimpleTextMessageResponseToWebHub(pHttpResponse, 507, NULL, "Not enough memory", NULL, requestNumber);
+                    free(szrequest_body);
+                    free(szCallBackURL);
+                    if (sig_value) free(sig_value);
+                    return FALSE;
+                }
+            }
+            strcat(szrequest_body, sz_request_temp);
+            request_size += cbSent;
         }
-        szrequest_body[cbSent] = '\0';
+        if (DebugLevel & DEBUG_TRACE_INFO_LEVEL)
+        {
+            WriteMessageInDebugFile(__LINE__, "Body Received in a POST request", requestNumber);
+            WriteMessageInDebugFile(__LINE__, szrequest_body, requestNumber);
+        }
         WriteMessageInDebugFile(__LINE__, "pHttpContext->ReadEntityBody COMPLETED while processing POST request", requestNumber);
     }
 
@@ -2379,6 +2416,7 @@ BOOL ProcessPostRequestFromServer(IN IHttpContext* pHttpContext, IHttpResponse* 
         {
             LeaveCriticalSectionDebug(&SubscriptionsSection);
             SendSimpleTextMessageResponseToWebHub(pHttpResponse, 404, NULL, "Signature validation failed", NULL);
+            free(szrequest_body);
             free(szCallBackURL);
             free(sig_value);
             return FALSE;
@@ -2393,6 +2431,7 @@ BOOL ProcessPostRequestFromServer(IN IHttpContext* pHttpContext, IHttpResponse* 
         unsigned i;
 
         // Call hmac-sha256 function
+       
         hmac_sha256(subs->szSecret, strlen(subs->szSecret), szrequest_body, strlen(szrequest_body), &out, sizeof(out));
      
         // Convert `out` to string with printf
@@ -2410,6 +2449,7 @@ BOOL ProcessPostRequestFromServer(IN IHttpContext* pHttpContext, IHttpResponse* 
         {
             LeaveCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
             SendSimpleTextMessageResponseToWebHub(pHttpResponse, 404, NULL, "Signature validation failed", NULL, requestNumber);
+            free(szrequest_body);
             free(szCallBackURL);
             free(sig_value);
             return FALSE;
@@ -2418,7 +2458,8 @@ BOOL ProcessPostRequestFromServer(IN IHttpContext* pHttpContext, IHttpResponse* 
     }
     
     // Save the notification for sending to the client throught the WS connection
-    AddNotificationsToSubscriptions(subs, (char*)szrequest_body, requestNumber); 
+    AddNotificationsToSubscriptions(subs, szrequest_body, requestNumber); 
+    free(szrequest_body);
     LeaveCriticalSectionDebug(&SubscriptionsSection, __LINE__, requestNumber);
     free(szCallBackURL);
     SendSimpleTextMessageResponseToWebHub(pHttpResponse, 204, NULL, NULL, NULL, requestNumber);
